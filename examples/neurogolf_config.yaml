@@ -1,0 +1,47 @@
+# NeuroGolf 比赛专用配置示例
+# 复制到项目根目录替换 config.yaml 即可
+#
+# 场景:用多个 ChatGPT 窗口并行优化 Kaggle NeuroGolf 比赛的 ONNX 模型,
+# Claude 监督器自动给空闲窗口发鼓励,让 ChatGPT 持续挖分。
+
+server:
+  host: 127.0.0.1
+  port: 5000
+
+userscript:
+  backend_url: http://127.0.0.1:5000
+
+supervisor:
+  enabled: true                # 启动即开监督器
+  poll_interval: 8
+  claude_cmd: claude
+
+  prompt: |
+    监督助手。下面是 ChatGPT 对话,做 Kaggle NeuroGolf 比赛。
+
+    任务:判断要不要继续,说一句极短的鼓励。
+
+    规则:
+    1. 到长度上限(对话太长/请开新对话/can't continue/too long)→ 第一行输出 SKIP
+    2. 否则输出一句鼓励:
+       - 涨分了 → 夸一句
+       - 没涨分 → 说继续
+       - 最多8个字,像"恭喜,请再接再厉""那就继续吧"
+       - 绝不给建议、不提task/方法名、不解释
+       - 绝对不能用"稳"字或任何暗示保守的词
+
+    输出格式:
+    REPLY
+    <一句话>
+
+    或
+
+    SKIP
+    <原因>
+
+  banned_words:
+    - 稳
+    - 保守
+    - 求稳
+    - 稳妥
+    - 谨慎

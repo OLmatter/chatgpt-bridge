@@ -1,0 +1,74 @@
+# ChatGPT WebUI Bridge 配置
+# 修改后重启服务生效
+
+server:
+  host: 127.0.0.1
+  port: 5000
+
+# 油猴脚本里的 BACKEND_URL 要和这里一致
+userscript:
+  backend_url: http://127.0.0.1:5000
+
+# 监督器(可选):自动用 Claude 给空闲的 ChatGPT 窗口发鼓励/催促
+supervisor:
+  enabled: false              # true = 启动时自动开监督器;false = 只开 API,手动调 /supervisor/start
+  poll_interval: 8            # 扫描间隔(秒)
+  claude_cmd: claude          # Claude CLI 命令名或完整路径(Windows 可能要写 C:\Users\xxx\AppData\Roaming\npm\claude.cmd)
+
+  # Claude 的 prompt 模板。{convo} 会被替换成最近对话内容。
+  # 改这里就能适配不同场景(学习、工作、比赛等)。
+  prompt: |
+    监督助手。下面是某个 ChatGPT 对话窗口的最近对话。
+
+    任务:判断要不要继续,说一句极短的鼓励。
+
+    规则:
+    1. 到长度上限(对话太长/请开新对话/can't continue/too long)→ 第一行输出 SKIP,第二行写原因
+    2. 否则:
+       - 表现好 → 夸一句
+       - 表现一般 → 说继续
+       - 最多8个字,像"恭喜,请再接再厉""那就继续吧""干得漂亮,继续"
+       - 绝不给技术建议、不提具体方法名
+       - 就一句口语,越短越好
+
+    输出格式:
+    REPLY
+    <一句话>
+
+    或
+
+    SKIP
+    <原因>
+
+  # 禁用词:Claude 回复里包含这些词会被自动删掉(防止干扰 ChatGPT 方向)
+  banned_words:
+    - 稳
+    - 保守
+    - 求稳
+    - 稳妥
+
+# ============================================================
+# NeuroGolf 比赛专用配置示例(取消注释替换上面的 supervisor 部分即可)
+# ============================================================
+# supervisor:
+#   enabled: true
+#   poll_interval: 8
+#   claude_cmd: claude
+#   prompt: |
+#     监督助手。下面是 ChatGPT 对话,做 Kaggle NeuroGolf 比赛。
+#     任务:判断要不要继续,说一句极短的鼓励。
+#     规则:
+#     1. 到长度上限(对话太长/请开新对话/can't continue/too long)→ 输出 SKIP
+#     2. 否则输出一句鼓励:
+#        - 涨分了 → 夸一句
+#        - 没涨分 → 说继续
+#        - 最多8个字
+#        - 绝不给建议、不提task/方法名、不解释
+#        - 绝对不能用"稳"字或暗示保守的词
+#     输出格式:
+#     REPLY
+#     <一句话>
+#     或
+#     SKIP
+#     <原因>
+#   banned_words: [稳, 保守, 求稳, 稳妥, 谨慎]
