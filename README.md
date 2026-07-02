@@ -36,12 +36,32 @@ python run.py --with-supervisor
 ### 3. 安装油猴脚本
 
 1. Chrome 装 [Tampermonkey](https://www.tampermonkey.net/) 扩展
-2. 油猴管理面板 → 新建脚本
-3. 把 `userscript/chatgpt_bridge.user.js` 的内容粘进去,Ctrl+S 保存
-4. 打开/刷新 ChatGPT 页面(`https://chatgpt.com/`)
-5. 页面右上角出现绿色 **"Bridge: 就绪"** 标签 = 成功
+
+   > ⚠️ **必须开启 Chrome 扩展的「开发者模式」**:地址栏输入 `chrome://extensions/` → 右上角打开 **开发者模式** 开关。Tampermonkey 在开发者模式关闭时会被 Chrome 限制,脚本无法注入或权限被拦。
+
+2. 打开 Tampermonkey 管理面板(`chrome-extension://dhdgffkkebhmkfjojejmpbldmpobfkfo/options.html`),点 **"+"** 新建脚本
+
+3. 把默认内容全删,粘贴 `userscript/chatgpt_bridge.user.js` 的全部内容,Ctrl+S 保存
+
+4. **给脚本开全部权限**(关键!不开权限会连不上):
+   - 回到 Tampermonkey 管理面板(已安装脚本列表)
+   - 找到 "ChatGPT WebUI Bridge",点右边的 **编辑** 铅笔图标
+   - 进入 **设置** 标签页
+   - 把以下权限全部改为 **允许/Always**:
+     - `GM_xmlhttpRequest` → 允许(核心!不发权限就连不上后端)
+     - 跨域请求 → 允许
+   - 底部 **保存**
+
+   > 如果 Tampermonkey 弹出权限确认框(首次发请求时),必须点 **允许**,否则 `GM_xmlhttpRequest` 无法访问 `http://127.0.0.1:5000`。
+
+5. 打开/刷新 ChatGPT 页面(`https://chatgpt.com/`)
+
+6. 页面右上角出现绿色 **"Bridge: 就绪"** 标签 = 成功
 
 > 可开多个 ChatGPT 标签页,每个都会自动连接。
+
+> 如果标签显示 **"等待服务..."**(红色):后端没启动,先跑 `python run.py`。
+> 如果显示 **"连接错误"**:检查 Tampermonkey 权限是否开了 + 后端是否在跑。
 
 ### 4. 你的 agent 接入
 
