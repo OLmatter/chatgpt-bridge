@@ -208,25 +208,42 @@ const POLL_INTERVAL = 400;                      // 轮询间隔(ms)
   async function poll() {
     while (true) {
       try {
-        // busy 时也回传快照(让后端能看到生成进度)
+        // 始终回传快照(即使 busy,让后端看到生成进度和页面状态)
         const snap = getSnapshot();
         const resp = await gmFetch('POST', '/poll', { page_id: PAGE_ID, snapshot: snap });
         if (resp && resp.cmd && !busy) {
           busy = true;
           setStatus('执行: ' + (resp.cmd === 'send' ? '发送' : resp.cmd), '#c83');
-          try {
-            const result = await processCommand(resp);
-            await gmFetch('POST', '/result', { id: resp.id, result });
-          } catch (e) {
-            await gmFetch('POST', '/result', { id: resp.id, result: { ok: false, error: String(e.message || e) } });
-          }
-          busy = false;
+          // 关键:命令处理放独立异步函数,不阻塞 poll 循环
+          executeCommand(resp);
         }
-        if (!busy) setStatus('就绪' + (snap ? ` (${snap.assistantCount}条)` : ''), '#2a2');
+        // busy 时显示执行中,否则显示就绪
+        if (busy) {
+          setStatus('执行中...' + (snap ? ` (${snap.assistantCount}条 ${snap.isGenerating ? '⏳' : ''})` : ''), '#c83');
+        } else {
+          setStatus('就绪' + (snap ? ` (${snap.assistantCount}条)` : ''), '#2a2');
+        }
       } catch (e) {
         setStatus('等待服务...', '#c33');
       }
       await sleep(POLL_INTERVAL);
+    }
+  }
+
+  // 独立执行命令(不阻塞 poll)。超时 120 秒强制结束释放 busy。
+  async function executeCommand(cmd) {
+    const deadline = Date.now() + 120000; // 硬超时 120 秒
+    const checkTimer = setInterval(() => {
+      if (Date.now() > deadline) { busy = false; }
+    }, 5000);
+    try {
+      const result = await processCommand(cmd);
+      await gmFetch('POST', '/result', { id: cmd.id, result });
+    } catch (e) {
+      await gmFetch('POST', '/result', { id: cmd.id, result: { ok: false, error: String(e.message || e) } });
+    } finally {
+      clearInterval(checkTimer);
+      busy = false; // 无论成功失败,都释放 busy
     }
   }
 
