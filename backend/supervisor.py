@@ -39,19 +39,27 @@ class Supervisor:
         self.last_handled: dict[str, str] = {}
 
     # ---- Claude 调用 ----
-    def ask_claude(self, prompt: str) -> str:
-        try:
-            r = subprocess.run(
-                [self.claude_cmd, "--print"],
-                input=prompt,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                timeout=60,
-            )
-            return r.stdout.strip()
-        except Exception as e:
-            return f"[CLAUDE_ERROR: {e}]"
+    def ask_claude(self, prompt: str) -> str | None:
+        """调 Claude CLI,超时返回 None(监督器下次再试)。"""
+        for attempt in range(2):  # 最多重试2次
+            try:
+                r = subprocess.run(
+                    [self.claude_cmd, "--print"],
+                    input=prompt,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    timeout=30,
+                )
+                return r.stdout.strip()
+            except subprocess.TimeoutExpired:
+                if attempt == 0:
+                    time.sleep(2)
+                    continue
+                return None
+            except Exception:
+                return None
+        return None
 
     def decide(self, recent_turns: list, last_reply: str) -> dict:
         """让 Claude 读对话,决定回复内容。"""
@@ -68,6 +76,8 @@ class Supervisor:
 
         result = self.ask_claude(prompt)
 
+        if result is None:
+            return {"action": "skip", "reason": "Claude超时,下次再试"}
         if result.upper().startswith("SKIP"):
             return {"action": "skip", "reason": result}
 
