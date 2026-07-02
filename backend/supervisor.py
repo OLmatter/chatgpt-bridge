@@ -98,12 +98,18 @@ class Supervisor:
         log(f"页面 {page_id} 空闲,调 Claude...")
         d = self.decide(turns, last_reply)
         if d["action"] == "skip":
-            log(f"  {page_id} 跳过: {d.get('reason', '')[:50]}")
+            reason = d.get('reason', '')[:50]
+            log(f"  {page_id} 跳过: {reason}")
+            if '超时' in reason:
+                self.last_handled[page_id] = f"__retry_{time.time()}__"
+            else:
+                self.last_handled[page_id] = snippet
             return
         msg = d["message"]
         log(f"  {page_id} Claude建议: {msg[:70]}")
         try:
             state.send_command(page_id, "send", msg)
+            self.last_handled[page_id] = snippet  # 成功后才标记
             log(f"  {page_id} ✓ 已入队发送")
         except Exception as e:
             log(f"  {page_id} ✗ {e}")
@@ -122,8 +128,16 @@ class Supervisor:
                     snap = state.get_snapshot(p["page_id"]) or {}
                     last = snap.get("lastAssistant", "")
                     snippet = last[-80:]
-                    if self.last_handled.get(p["page_id"]) == snippet:
+                    handled = self.last_handled.get(p["page_id"])
+                    if handled == snippet:
                         continue
+                    # retry 标记 60 秒后过期
+                    if handled and handled.startswith("__retry_"):
+                        try:
+                            if time.time() - float(handled.split("_")[2]) < 60:
+                                continue
+                        except Exception:
+                            pass
                     if not last or len(last) < 20:
                         continue
                     idle.append((p["page_id"], snap.get("recentTurns", []), last, snippet))
@@ -138,7 +152,7 @@ class Supervisor:
                             daemon=True,
                         )
                         t.start()
-                        self.last_handled[pid] = snippet
+                        # 不提前标记!在 handle_page 成功发送后才标记
             except Exception as e:
                 log(f"监督器异常: {e}")
 
