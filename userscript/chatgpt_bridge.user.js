@@ -205,14 +205,21 @@ const POLL_INTERVAL = 400;                      // 轮询间隔(ms)
 
   // ====== 轮询主循环 ======
   let busy = false;
+  let busySince = 0;
   async function poll() {
     while (true) {
       try {
+        // 强制 busy 复位:超过 60 秒说明卡死了
+        if (busy && Date.now() - busySince > 60000) {
+          console.log('[Bridge] busy 超时强制复位');
+          busy = false;
+        }
         // 始终回传快照(即使 busy,让后端看到生成进度和页面状态)
         const snap = getSnapshot();
         const resp = await gmFetch('POST', '/poll', { page_id: PAGE_ID, snapshot: snap });
         if (resp && resp.cmd && !busy) {
           busy = true;
+          busySince = Date.now();
           setStatus('执行: ' + (resp.cmd === 'send' ? '发送' : resp.cmd), '#c83');
           // 关键:命令处理放独立异步函数,不阻塞 poll 循环
           executeCommand(resp);
