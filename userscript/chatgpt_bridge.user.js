@@ -121,6 +121,16 @@ const POLL_INTERVAL = 400;                      // 轮询间隔(ms)
     };
   }
 
+  function isGenerating() {
+    for (const s of ['button[data-testid="stop-button"]', 'button[aria-label="停止"]', 'button[aria-label="Stop"]', 'button[aria-label*="止"]', 'button[aria-label*="top"]']) {
+      const b = document.querySelector(s);
+      if (b && b.offsetParent !== null) return true;
+    }
+    const ed = getEditor();
+    if (ed && (ed.getAttribute('data-disabled') === 'true' || ed.getAttribute('contenteditable') === 'false')) return true;
+    return false;
+  }
+
   // ====== 命令执行 ======
   async function sendMessage(text) {
     const editor = getEditor();
@@ -137,22 +147,40 @@ const POLL_INTERVAL = 400;                      // 轮询间隔(ms)
       document.execCommand('insertText', false, text);
     }
     await sleep(400);
+    // Enter 发送,2秒后检查是否成功,失败则点发送按钮兜底
     editor.dispatchEvent(new KeyboardEvent('keydown', {
       key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true,
     }));
+    await sleep(2000);
+    if ((editor.innerText || editor.value || '').trim().length > 0) {
+      for (const sel of ['button[data-testid="send-button"]', 'button[aria-label="发送"]', 'button[aria-label="Send"]', 'form button[type="submit"]']) {
+        const btn = document.querySelector(sel);
+        if (btn && btn.offsetParent !== null && !btn.disabled) { btn.click(); break; }
+      }
+      await sleep(1500);
+    }
+
     const start = Date.now();
-    const TIMEOUT = 120000;
+    const TIMEOUT = 90000;
     let sawNew = false;
+    let genDetected = false;
     while (Date.now() - start < TIMEOUT) {
-      await sleep(600);
+      await sleep(800);
       const cur = countAssistant();
-      if (!sawNew) { if (cur > before) sawNew = true; continue; }
-      if (sawNew && !isGenerating() && Date.now() - start > 2000) {
-        await sleep(800);
+      if (!sawNew) { if (cur > before) { sawNew = true; genDetected = true; } continue; }
+      const gen = isGenerating();
+      if (gen) genDetected = true;
+      if (sawNew && genDetected && !gen && Date.now() - start > 3000) {
+        await sleep(1000);
         const n = countAssistant();
         if (n) return (document.querySelectorAll('[data-message-author-role="assistant"]')[n - 1].querySelector('.markdown')
           || document.querySelectorAll('[data-message-author-role="assistant"]')[n - 1]).innerText.trim();
         return '';
+      }
+      if (sawNew && !genDetected && Date.now() - start > 5000) {
+        const n = countAssistant();
+        if (n) return (document.querySelectorAll('[data-message-author-role="assistant"]')[n - 1].querySelector('.markdown')
+          || document.querySelectorAll('[data-message-author-role="assistant"]')[n - 1]).innerText.trim();
       }
     }
     return sawNew ? '[超时但有回复]' : '[超时:无回复]';
@@ -180,7 +208,8 @@ const POLL_INTERVAL = 400;                      // 轮询间隔(ms)
   async function poll() {
     while (true) {
       try {
-        const snap = busy ? null : getSnapshot();
+        // busy 时也回传快照(让后端能看到生成进度)
+        const snap = getSnapshot();
         const resp = await gmFetch('POST', '/poll', { page_id: PAGE_ID, snapshot: snap });
         if (resp && resp.cmd && !busy) {
           busy = true;
