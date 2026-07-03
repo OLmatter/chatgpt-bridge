@@ -121,66 +121,60 @@ class MonitorApp:
         for item in self.tree.get_children():
             self.tree.delete(item)
 
-        # 按状态排序:生成中 > 空闲 > 掉线
-        def sort_key(p):
-            age = p.get("age", 999)
-            gen = p.get("isGenerating", False)
-            if age >= 3:
-                return (2, age)
-            if gen:
-                return (0, age)
-            return (1, age)
-
-        pages.sort(key=sort_key)
-
-        alive_n = gen_n = idle_n = dead_n = 0
+        # 先算每个页面的状态 + 累积时长(用于排序和显示)
+        page_infos = []
         for p in pages:
             pid = p.get("page_id") or "?"
             age = p.get("age", 999)
             gen = p.get("isGenerating", False)
-            title = (p.get("title") or "").strip()[:25] or "(无标题)"
-            msgs = p.get("assistantCount", 0)
-
-            # 判断状态
             if age >= 3:
                 state_name = "dead"
-                icon = "🔴"
-                tag = "dead"
-                dead_n += 1
             elif gen:
                 state_name = "gen"
-                icon = "🟢"
-                tag = "gen"
-                gen_n += 1
-                alive_n += 1
             else:
                 state_name = "idle"
-                icon = "✅"
-                tag = "idle"
-                idle_n += 1
-                alive_n += 1
-
-            # 累积时长:状态没变就累加,变了就重新计时
             prev = self._state_since.get(pid)
             if prev and prev[0] == state_name:
-                dur_seconds = int(now - prev[1])
+                dur = now - prev[1]
             else:
                 self._state_since[pid] = (state_name, now)
-                dur_seconds = 0
+                dur = 0
+            page_infos.append((p, pid, state_name, dur))
+
+        # 排序: 生成中(时长越长越上) > 空闲(时长越短越上) > 掉线
+        # 组号: gen=0, idle=1, dead=2; gen组内按时长降序, idle组内按时长升序
+        page_infos.sort(key=lambda x: (
+            0 if x[2]=="gen" else (1 if x[2]=="idle" else 2),
+            -x[3] if x[2]=="gen" else x[3]
+        ))
+
+        alive_n = gen_n = idle_n = dead_n = 0
+        for p, pid, state_name, dur in page_infos:
+            title = (p.get("title") or "").strip()[:25] or "(无标题)"
+            msgs = p.get("assistantCount", 0)
+            dur_seconds = int(dur)
+
+            if state_name == "dead":
+                icon = "🔴"; tag = "dead"; dead_n += 1
+            elif state_name == "gen":
+                icon = "🟢"; tag = "gen"; gen_n += 1; alive_n += 1
+            else:
+                icon = "✅"; tag = "idle"; idle_n += 1; alive_n += 1
 
             # 空闲超30秒高亮
             if state_name == "idle" and dur_seconds > 30:
                 tag = "idle_long"
 
             # 格式化时长
+            label = "掉线" if state_name=="dead" else ("生成" if state_name=="gen" else "停")
             if dur_seconds >= 3600:
-                dur = f"{'掉线' if state_name=='dead' else '生成' if state_name=='gen' else '停'} {dur_seconds//3600}h{(dur_seconds%3600)//60}m"
+                dur_s = f"{label} {dur_seconds//3600}h{(dur_seconds%3600)//60}m"
             elif dur_seconds >= 60:
-                dur = f"{'掉线' if state_name=='dead' else '生成' if state_name=='gen' else '停'} {dur_seconds//60}m{dur_seconds%60}s"
+                dur_s = f"{label} {dur_seconds//60}m{dur_seconds%60}s"
             else:
-                dur = f"{'掉线' if state_name=='dead' else '生成' if state_name=='gen' else '停'} {dur_seconds}s"
+                dur_s = f"{label} {dur_seconds}s"
 
-            self.tree.insert("", tk.END, values=(icon, title, dur, msgs), tags=(tag,))
+            self.tree.insert("", tk.END, values=(icon, title, dur_s, msgs), tags=(tag,))
 
         # 顶部汇总
         sup_on = (status or {}).get("supervisor_on", True) if status else False
