@@ -127,7 +127,7 @@ npm install -g @anthropic-ai/claude-code
 
 ```
 chatgpt-bridge/
-├── run.py                       # 一键启动
+├── run.py                       # 一键启动 (FastAPI 版)
 ├── config.yaml                  # 配置
 ├── requirements.txt
 ├── backend/
@@ -136,10 +136,23 @@ chatgpt-bridge/
 │   └── supervisor.py            # Claude 监督器
 ├── userscript/
 │   └── chatgpt_bridge.user.js   # 油猴脚本
-└── examples/
-    ├── agent_client.py          # Python 客户端封装
-    └── neurogolf_config.yaml    # NeuroGolf 比赛配置示例
+├── examples/
+│   ├── agent_client.py          # Python 客户端封装
+│   └── neurogolf_config.yaml    # NeuroGolf 比赛配置示例
+└── local/                       # 单体版(不想装 FastAPI 时用)
+    ├── run_all.py               # 桥接+监督器一体(标准库,零依赖)
+    ├── monitor.py               # tkinter 监控 GUI(窗口状态+自动回复开关)
+    └── restart.bat              # 一键重启(杀掉旧进程避免端口冲突)
 ```
+
+### FastAPI 版 vs 单体版
+
+| | FastAPI 版(`run.py`) | 单体版(`local/run_all.py`) |
+|---|---|---|
+| 依赖 | fastapi, uvicorn, pyyaml | 零依赖(Python 标准库) |
+| API 文档 | `/docs` 交互式 | 无 |
+| 监控 GUI | 无 | `local/monitor.py` |
+| 适用场景 | 给 agent 正式集成 | 自己快速用 |
 
 ## 注意事项
 
