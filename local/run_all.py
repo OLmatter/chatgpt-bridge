@@ -28,7 +28,6 @@ RESULTS: dict[str, dict] = {}
 LOCK = threading.Lock()
 LAST_HANDLED = {}  # 监督器: page_id -> snippet 防重复
 SUPERVISOR_ENABLED = {"on": True}  # 监督器总开关,GUI 可控制
-CLAUDE_LOCK = threading.Lock()    # Claude 串行锁(避免并发起多个 node 进程爆内存)
 
 
 def _now(): return time.time()
@@ -49,35 +48,22 @@ def log(msg):
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
-# ====== Claude 调用(串行,避免并发 node 进程爆内存)======
+# ====== Claude 调用 ======
 def ask_claude(prompt):
-    """调 Claude CLI,超时则杀子进程返回 None。串行锁保证同时只有一个。"""
-    with CLAUDE_LOCK:
-        for attempt in range(2):
-            proc = None
-            try:
-                proc = subprocess.Popen(
-                    [CLAUDE_CMD, "--print"],
-                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                    text=True, encoding="utf-8",
-                )
-                stdout, _ = proc.communicate(input=prompt, timeout=30)
-                return stdout.strip()
-            except subprocess.TimeoutExpired:
-                # 超时:强制杀掉这个子进程(不影响你自己开的 claude code)
-                if proc:
-                    proc.kill()
-                    proc.wait(timeout=5)
-                if attempt == 0:
-                    time.sleep(2)
-                    continue
-                return None
-            except Exception:
-                if proc:
-                    try: proc.kill()
-                    except: pass
-                return None
-        return None
+    """调 Claude CLI,超时则跳过返回 None(监督器下次再试)。"""
+    for attempt in range(2):  # 最多重试2次
+        try:
+            r = subprocess.run([CLAUDE_CMD, "--print"], input=prompt,
+                               capture_output=True, text=True, encoding="utf-8", timeout=30)
+            return r.stdout.strip()
+        except subprocess.TimeoutExpired:
+            if attempt == 0:
+                time.sleep(2)  # 第一次超时,等2秒重试
+                continue
+            return None  # 第二次还超时,跳过
+        except Exception:
+            return None
+    return None
 
 
 def claude_decide(recent_turns, last_reply):
@@ -89,20 +75,15 @@ def claude_decide(recent_turns, last_reply):
 
 任务:判断要不要继续,说一句极短的鼓励。
 
-判断涨分大小:
-- 如果回复里出现 +0.00X 这种小数(比如 +0.002, +0.008),那就是"微分"(≤0.01)
-- 如果出现 +0.01 或更大(比如 +0.05),那才是"大涨分"
-
 规则:
 1. 到长度上限(对话太长/请开新对话/can't continue/too long)→ 输出 SKIP
-2. 否则:
-   - 大涨分(>0.01)→ 夸一句,像"漂亮,继续""干得好"
-   - 微分(≤0.01,就是+0.00X这种)→ 催它吃大分,像"微分够了该冲大的了""别磨0.00X了冲大分""蚊子腿吃够该换大目标了""小分别浪费token了"
-   - 没涨分 → 催换方向,像"换个方向冲大分""别纠结了换路子"
-   - 最多12个字,口语
-   - 绝不给具体技术建议、不提task名/方法名
-   - ⚠️ 绝对不能用"稳"字或保守暗示词
-   - 核心:别让它满足于磨微分,催它大胆冲大分
+2. 否则输出一句鼓励,要求:
+   - 涨分了 → 夸一句
+   - 没涨分 → 说继续
+   - 最多8个字,像"恭喜,请再接再厉""那就继续吧""干得漂亮,继续"
+   - 绝不给建议、不提task/方法名、不解释、不加标点堆砌
+   - 就一句口语,越短越好
+   - ⚠️ 绝对不能用"稳"字,也不能用任何暗示保守/求稳的词
 
 输出格式:
 REPLY
@@ -291,14 +272,15 @@ def supervisor_loop():
                 last = snap.get("lastAssistant","")
                 snip = last[-80:]
                 handled = LAST_HANDLED.get(pid)
-                # 两次催之间至少间隔 300 秒(5分钟),让 ChatGPT 有时间真正干活
+                # handled 格式: "时间戳|snip" —— 90秒内同 snip 不重发,超时重发
                 should_skip = False
                 if handled and "|" in handled:
                     parts = handled.split("|", 1)
                     try:
                         ts = float(parts[0])
-                        if _now() - ts < 300:
-                            should_skip = True  # 5分钟内不重复催
+                        old_snip = parts[1] if len(parts) > 1 else ""
+                        if old_snip == snip and _now() - ts < 90:
+                            should_skip = True  # 90秒内同回复不重发
                     except ValueError:
                         pass
                 if should_skip: continue
