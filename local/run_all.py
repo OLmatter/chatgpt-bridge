@@ -28,6 +28,7 @@ RESULTS: dict[str, dict] = {}
 LOCK = threading.Lock()
 LAST_HANDLED = {}  # 监督器: page_id -> snippet 防重复
 SUPERVISOR_ENABLED = {"on": True}  # 监督器总开关,GUI 可控制
+CLAUDE_LOCK = threading.Lock()    # Claude 串行锁(避免并发起多个 node 进程爆内存)
 
 
 def _now(): return time.time()
@@ -48,22 +49,24 @@ def log(msg):
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
-# ====== Claude 调用 ======
+# ====== Claude 调用(串行,避免并发 node 进程爆内存)======
 def ask_claude(prompt):
-    """调 Claude CLI,超时则跳过返回 None(监督器下次再试)。"""
-    for attempt in range(2):  # 最多重试2次
-        try:
-            r = subprocess.run([CLAUDE_CMD, "--print"], input=prompt,
-                               capture_output=True, text=True, encoding="utf-8", timeout=30)
-            return r.stdout.strip()
-        except subprocess.TimeoutExpired:
-            if attempt == 0:
-                time.sleep(2)  # 第一次超时,等2秒重试
-                continue
-            return None  # 第二次还超时,跳过
-        except Exception:
-            return None
-    return None
+    """调 Claude CLI,超时则跳过返回 None。串行锁保证同时只有一个 node 进程。"""
+    with CLAUDE_LOCK:  # 串行:同时只调一个 Claude,避免内存爆炸
+        for attempt in range(2):
+            try:
+                r = subprocess.run([CLAUDE_CMD, "--print"], input=prompt,
+                                   capture_output=True, text=True, encoding="utf-8", timeout=30)
+                return r.stdout.strip()
+            except subprocess.TimeoutExpired:
+                # 超时时强制杀掉残留进程
+                if attempt == 0:
+                    time.sleep(2)
+                    continue
+                return None
+            except Exception:
+                return None
+        return None
 
 
 def claude_decide(recent_turns, last_reply):
