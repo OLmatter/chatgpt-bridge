@@ -51,20 +51,31 @@ def log(msg):
 
 # ====== Claude 调用(串行,避免并发 node 进程爆内存)======
 def ask_claude(prompt):
-    """调 Claude CLI,超时则跳过返回 None。串行锁保证同时只有一个 node 进程。"""
-    with CLAUDE_LOCK:  # 串行:同时只调一个 Claude,避免内存爆炸
+    """调 Claude CLI,超时则杀子进程返回 None。串行锁保证同时只有一个。"""
+    with CLAUDE_LOCK:
         for attempt in range(2):
+            proc = None
             try:
-                r = subprocess.run([CLAUDE_CMD, "--print"], input=prompt,
-                                   capture_output=True, text=True, encoding="utf-8", timeout=30)
-                return r.stdout.strip()
+                proc = subprocess.Popen(
+                    [CLAUDE_CMD, "--print"],
+                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    text=True, encoding="utf-8",
+                )
+                stdout, _ = proc.communicate(input=prompt, timeout=30)
+                return stdout.strip()
             except subprocess.TimeoutExpired:
-                # 超时时强制杀掉残留进程
+                # 超时:强制杀掉这个子进程(不影响你自己开的 claude code)
+                if proc:
+                    proc.kill()
+                    proc.wait(timeout=5)
                 if attempt == 0:
                     time.sleep(2)
                     continue
                 return None
             except Exception:
+                if proc:
+                    try: proc.kill()
+                    except: pass
                 return None
         return None
 
