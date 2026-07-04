@@ -22,17 +22,20 @@ def kill_pid(pid):
         return False
 
 
-def find_port_pid(port):
-    """找占用指定端口的 PID。"""
+def find_port_pids(port):
+    """找所有占用指定端口的 PID(可能有多个残留进程)。"""
+    pids = []
     try:
         r = subprocess.run(["netstat", "-ano"], capture_output=True, text=True, timeout=5)
         for line in r.stdout.split("\n"):
             if f":{port}" in line and "LISTENING" in line:
                 parts = line.split()
-                return parts[-1]
+                pid = parts[-1]
+                if pid.isdigit() and pid not in pids:
+                    pids.append(pid)
     except Exception:
         pass
-    return None
+    return pids
 
 
 def find_monitor_pids():
@@ -70,13 +73,14 @@ def main():
     print("  ChatGPT Bridge 一键启动器")
     print("=" * 50)
 
-    # === Step 1: 杀旧后端(占用5000端口的) ===
+    # === Step 1: 杀旧后端(所有占用5000端口的) ===
     print("\n[1/5] 自检:杀旧后端进程...")
-    old_pid = find_port_pid(PORT)
-    if old_pid:
-        print(f"  发现端口 {PORT} 被 PID {old_pid} 占用,杀掉")
-        kill_pid(old_pid)
-        time.sleep(2)
+    old_pids = find_port_pids(PORT)
+    if old_pids:
+        for pid in old_pids:
+            print(f"  杀端口 {PORT} 占用者 PID {pid}")
+            kill_pid(pid)
+        time.sleep(3)
     else:
         print(f"  端口 {PORT} 空闲")
 
@@ -93,7 +97,7 @@ def main():
     # === Step 3: 确认端口释放 ===
     print("\n[3/5] 确认端口释放...")
     for i in range(5):
-        if not find_port_pid(PORT):
+        if not find_port_pids(PORT):
             print(f"  端口 {PORT} 已释放")
             break
         print(f"  端口仍被占用,等待...({i+1}/5)")

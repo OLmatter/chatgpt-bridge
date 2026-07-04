@@ -28,6 +28,7 @@ RESULTS: dict[str, dict] = {}
 LOCK = threading.Lock()
 LAST_HANDLED = {}  # 监督器: page_id -> snippet 防重复
 SUPERVISOR_ENABLED = {"on": True}  # 监督器总开关,GUI 可控制
+CLAUDE_LOCK = threading.Lock()    # Claude 串行锁(避免并发起多个 node 进程爆内存+卡死)
 
 
 def _now(): return time.time()
@@ -48,22 +49,34 @@ def log(msg):
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
-# ====== Claude 调用 ======
+# ====== Claude 调用(串行锁 + Popen,避免僵尸进程和内存爆炸)======
 def ask_claude(prompt):
-    """调 Claude CLI,超时则跳过返回 None(监督器下次再试)。"""
-    for attempt in range(2):  # 最多重试2次
-        try:
-            r = subprocess.run([CLAUDE_CMD, "--print"], input=prompt,
-                               capture_output=True, text=True, encoding="utf-8", timeout=30)
-            return r.stdout.strip()
-        except subprocess.TimeoutExpired:
-            if attempt == 0:
-                time.sleep(2)  # 第一次超时,等2秒重试
-                continue
-            return None  # 第二次还超时,跳过
-        except Exception:
-            return None
-    return None
+    """调 Claude CLI,超时杀子进程返回 None。串行锁保证同时只有一个。"""
+    with CLAUDE_LOCK:
+        for attempt in range(2):
+            proc = None
+            try:
+                proc = subprocess.Popen(
+                    [CLAUDE_CMD, "--print"],
+                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    text=True, encoding="utf-8",
+                )
+                stdout, _ = proc.communicate(input=prompt, timeout=30)
+                return stdout.strip()
+            except subprocess.TimeoutExpired:
+                if proc:
+                    proc.kill()
+                    proc.wait(timeout=5)
+                if attempt == 0:
+                    time.sleep(2)
+                    continue
+                return None
+            except Exception:
+                if proc:
+                    try: proc.kill()
+                    except: pass
+                return None
+        return None
 
 
 def claude_decide(recent_turns, last_reply):
@@ -202,6 +215,8 @@ class Handler(BaseHTTPRequestHandler):
                 if body.get("snapshot"): PAGES[pid]["snapshot"] = body["snapshot"]
                 try: cmd = PAGES[pid]["queue"].get_nowait()
                 except: cmd = {}
+            # 发响应前先触发监督器(在 poll 线程里跑,有间隔限制不会频繁)
+            supervisor_once()
             self._send(200, cmd)
 
         elif self.path == "/result":
@@ -242,68 +257,61 @@ def _wait(rid, timeout):
     return {"ok":False, "error":"超时"}
 
 
-# ====== 监督器线程 ======
-def supervisor_loop():
-    time.sleep(3)
-    log("监督器启动: 扫描空闲页面 → Claude 决策 → 自动回复(并发)")
-    tick = 0
-    while True:
-        # 开关关闭时跳过(但仍打印心跳)
-        if not SUPERVISOR_ENABLED.get("on", True):
-            tick += 1
-            if tick % 5 == 1:
-                log(f"心跳#{tick}: 监督器已关闭(PAGES={len(PAGES)})")
-            time.sleep(POLL_INTERVAL)
-            continue
-        try:
-            tick += 1
-            with LOCK:
-                all_pages = list(PAGES.items())
-            if tick % 5 == 1:
-                log(f"心跳#{tick}: PAGES={len(all_pages)} id={id(PAGES)}")
-            ps = [(pid, dict(p)) for pid,p in all_pages]
-            # 调试:看活跃页面的状态
-            alive_debug = [(pid, _now()-p.get("last_poll",0), (p.get("snapshot") or {}).get("isGenerating"), bool((p.get("snapshot") or {}).get("lastAssistant"))) for pid,p in ps if _now()-p.get("last_poll",0)<10]
-            idle_pages = []
-            for pid, p in ps:
-                snap = p.get("snapshot") or {}
-                if _now()-p["last_poll"]>=3: continue
-                if snap.get("isGenerating"): continue
-                last = snap.get("lastAssistant","")
-                snip = last[-80:]
-                handled = LAST_HANDLED.get(pid)
-                # handled 格式: "时间戳|snip" —— 90秒内同 snip 不重发,超时重发
-                should_skip = False
-                if handled and "|" in handled:
-                    parts = handled.split("|", 1)
-                    try:
-                        ts = float(parts[0])
-                        old_snip = parts[1] if len(parts) > 1 else ""
-                        if old_snip == snip and _now() - ts < 90:
-                            should_skip = True  # 90秒内同回复不重发
-                    except ValueError:
-                        pass
-                if should_skip: continue
-                # 即使 lastAssistant 为空也处理(新对话/刚刷新的页面需要督促)
-                turns = snap.get("recentTurns", [])
-                idle_pages.append((pid, turns, last or "(无回复历史,新开对话)", last[-80:] if last else "empty"))
-            gen = sum(1 for _,p in ps if (p.get("snapshot") or {}).get("isGenerating"))
-            idle_count = len([1 for _,p in ps if _now()-p["last_poll"]<3 and not (p.get("snapshot") or {}).get("isGenerating")])
-            if idle_pages:
-                log(f"扫描: {len(ps)}页 空闲{idle_count} 待处理{len(idle_pages)} 生成中{gen} | 活跃debug: {[(p[:12], f'{a:.1f}s', g, has) for p,a,g,has in alive_debug[:4]]}")
-                for pid, turns, last, snip in idle_pages:
-                    # 不提前标记!在 handle_page 里成功发送后才标记
-                    t = threading.Thread(target=handle_page, args=(pid, turns, last, snip), daemon=True)
-                    t.start()
-            elif idle_count > 0:
-                log(f"扫描: {len(ps)}页 空闲{idle_count} 但都已被处理(等新回复) 生成中{gen} | debug: {[(p[:12], f'{a:.1f}s', g) for p,a,g,has in alive_debug[:4]]}")
-            else:
-                # 有活跃页面但全在生成
-                if alive_debug:
-                    log(f"扫描: {len(ps)}页 活跃{len(alive_debug)} 全生成中 gen={gen}")
-        except Exception as e:
-            log(f"监督器异常: {e}")
-        time.sleep(POLL_INTERVAL)
+# ====== 监督器(由 HTTP poll 间接触发,不用独立线程)======
+_last_supervisor_run = [0]
+
+def supervisor_once():
+    """监督器单次扫描。由油猴 poll 时触发(每 POLL_INTERVAL 秒最多跑一次)。"""
+    now = _now()
+    if now - _last_supervisor_run[0] < POLL_INTERVAL:
+        return
+    _last_supervisor_run[0] = now
+
+    if not SUPERVISOR_ENABLED.get("on", True):
+        log("监督器: 已关闭")
+        return
+    try:
+        all_pages = list(PAGES.items())
+        log(f"监督器扫描: PAGES={len(all_pages)}")
+        if not all_pages:
+            return
+        all_pages = list(PAGES.items())
+        if not all_pages:
+            return
+        ps = [(pid, dict(p)) for pid, p in all_pages]
+        idle_pages = []
+        for pid, p in ps:
+            snap = p.get("snapshot") or {}
+            if now - p["last_poll"] >= 3:
+                continue
+            if snap.get("isGenerating"):
+                continue
+            last = snap.get("lastAssistant", "")
+            snip = last[-80:] if last else "empty"
+            handled = LAST_HANDLED.get(pid)
+            should_skip = False
+            if handled and "|" in handled:
+                parts = handled.split("|", 1)
+                try:
+                    ts = float(parts[0])
+                    old_snip = parts[1] if len(parts) > 1 else ""
+                    if old_snip == snip and now - ts < 90:
+                        should_skip = True
+                except ValueError:
+                    pass
+            if should_skip:
+                continue
+            turns = snap.get("recentTurns", [])
+            idle_pages.append((pid, turns, last or "(无回复)", snip))
+
+        if idle_pages:
+            gen = sum(1 for _, p in ps if (p.get("snapshot") or {}).get("isGenerating"))
+            log(f"扫描: {len(ps)}页 待处理{len(idle_pages)} 生成中{gen}")
+            for pid, turns, last, snip in idle_pages:
+                t = threading.Thread(target=handle_page, args=(pid, turns, last, snip), daemon=True)
+                t.start()
+    except Exception as e:
+        log(f"监督器异常: {e}")
 
 
 def handle_page(pid, turns, last_reply, snip):
@@ -331,13 +339,13 @@ def handle_page(pid, turns, last_reply, snip):
 
 
 def main():
-    t = threading.Thread(target=supervisor_loop, daemon=True)
-    t.start()
     server = ThreadingHTTPServer(("127.0.0.1", HTTP_PORT), Handler)
-    log(f"桥接服务 http://127.0.0.1:{HTTP_PORT} | 监督器每{POLL_INTERVAL}s扫描")
+    log(f"桥接服务 http://127.0.0.1:{HTTP_PORT} | 监督器由 poll 触发(每{POLL_INTERVAL}s)")
     log("等待油猴脚本连接...")
-    try: server.serve_forever()
-    except KeyboardInterrupt: log("已停止")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        log("已停止")
 
 
 if __name__ == "__main__":
