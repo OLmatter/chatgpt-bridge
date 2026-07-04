@@ -235,8 +235,7 @@ class Handler(BaseHTTPRequestHandler):
                     target=alive[0]
             cid = str(uuid.uuid4())[:8]
             with LOCK: PAGES[target]["queue"].put({"id":cid,"cmd":"send","text":text})
-            r = _wait(cid, 150)
-            self._send(200, r)
+            self._send(200, {"ok": True, "msg": "已入队"})  # 不等result,避免busy卡死阻塞
 
         elif self.path == "/new_chat":
             with LOCK:
@@ -294,8 +293,8 @@ def supervisor_once():
                 parts = handled.split("|", 1)
                 try:
                     ts = float(parts[0])
-                    old_snip = parts[1] if len(parts) > 1 else ""
-                    if old_snip == snip and now - ts < 90:
+                    # 不管回复变没变,90秒内不重复催同一窗口
+                    if now - ts < 90:
                         should_skip = True
                 except ValueError:
                     pass
