@@ -291,14 +291,14 @@ def supervisor_loop():
                 last = snap.get("lastAssistant","")
                 snip = last[-80:]
                 handled = LAST_HANDLED.get(pid)
-                # 两次催之间至少间隔 120 秒,避免 ChatGPT 回一句就被催,变成纯聊天
+                # 两次催之间至少间隔 300 秒(5分钟),让 ChatGPT 有时间真正干活
                 should_skip = False
                 if handled and "|" in handled:
                     parts = handled.split("|", 1)
                     try:
                         ts = float(parts[0])
-                        if _now() - ts < 120:
-                            should_skip = True  # 120秒内不重复催(不管回复变没变)
+                        if _now() - ts < 300:
+                            should_skip = True  # 5分钟内不重复催
                     except ValueError:
                         pass
                 if should_skip: continue
