@@ -38,40 +38,24 @@ def find_port_pids(port):
     return pids
 
 
-def find_monitor_pids():
-    """找所有跑 monitor.py 的 python 进程 PID。"""
+def find_process_pids_by_script(script_name):
+    """找所有跑指定脚本的 python 进程 PID。用 PowerShell 精确匹配命令行。排除 launcher 自己。"""
     pids = []
-    for proc_name in ["python3.12.exe", "python.exe"]:
-        try:
-            r = subprocess.run(
-                ["wmic", "process", "where", f"name='{proc_name}'", "get", "ProcessId,CommandLine"],
-                capture_output=True, text=True, timeout=5)
-            for line in r.stdout.split("\n"):
-                if "monitor.py" in line:
-                    for tok in line.split():
-                        if tok.isdigit():
-                            pids.append(tok)
-        except Exception:
-            pass
-    return pids
-
-
-def find_run_all_pids():
-    """找所有跑 run_all.py 的 python 进程 PID(包括不占端口的残留)。"""
-    pids = []
-    for proc_name in ["python3.12.exe", "python.exe"]:
-        try:
-            r = subprocess.run(
-                ["wmic", "process", "where", f"name='{proc_name}'", "get", "ProcessId,CommandLine"],
-                capture_output=True, text=True, timeout=5)
-            for line in r.stdout.split("\n"):
-                if "run_all.py" in line:
-                    for tok in line.split():
-                        if tok.isdigit():
-                            pids.append(tok)
-        except Exception:
-            pass
-    return pids
+    my_pid = str(os.getpid())
+    try:
+        cmd = f'Get-CimInstance Win32_Process | Where-Object {{$_.CommandLine -like "*{script_name}*" -and $_.Name -like "*python*" -and $_.ProcessId -ne {my_pid} -and $_.CommandLine -notlike "*launcher*"}} | Select-Object -ExpandProperty ProcessId'
+        r = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", cmd],
+            capture_output=True, timeout=10)
+        stdout = r.stdout.decode("utf-8", errors="replace").strip()
+        if stdout:
+            for line in stdout.split("\n"):
+                line = line.strip()
+                if line.isdigit() and int(line) > 1000:
+                    pids.append(line)
+    except Exception:
+        pass
+    return list(set(pids))
 
 
 def is_port_up(port):
@@ -94,7 +78,7 @@ def main():
     # === Step 1: 杀旧后端(占端口的所有PID + 所有跑run_all.py的残留) ===
     print("\n[1/5] 自检:杀旧后端进程...")
     port_pids = find_port_pids(PORT)
-    run_pids = find_run_all_pids()
+    run_pids = find_process_pids_by_script("run_all.py")
     all_backend_pids = list(set(port_pids + run_pids))
     if all_backend_pids:
         for pid in all_backend_pids:
@@ -106,7 +90,7 @@ def main():
 
     # === Step 2: 杀旧监控 ===
     print("\n[2/5] 自检:杀旧监控进程...")
-    mon_pids = find_monitor_pids()
+    mon_pids = find_process_pids_by_script("monitor.py")
     for pid in mon_pids:
         print(f"  杀旧监控 PID {pid}")
         kill_pid(pid)
@@ -185,8 +169,8 @@ def main():
             print(f"    API 检查:   ✗ {e}")
 
     # 残留进程检查
-    leftover_mon = find_monitor_pids()
-    leftover_mon = [p for p in leftover_mon if str(monitor.pid) not in p]
+    leftover_mon = find_process_pids_by_script("monitor.py")
+    leftover_mon = [p for p in leftover_mon if str(p) != str(monitor.pid)]
     if leftover_mon:
         print(f"    ⚠️ 残留监控: {leftover_mon}")
     else:
