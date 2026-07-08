@@ -125,7 +125,7 @@ def _cleanup_stale():
         for pid in stale:
             del PAGES[pid]
     if stale:
-        log(f"清理 {len(stale)} 个掉线页面")
+        log(f"Cleaned {len(stale)} stale offline page(s)")
 
 
 def log(msg):
@@ -246,7 +246,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             _cleanup_stale()
         except Exception as e:
-            log(f"清理异常: {e}")
+            log(f"Cleanup error: {e}")
         if self.path == "/status":
             with LOCK:
                 alive = sum(1 for p in PAGES.values() if _now()-p["last_poll"]<3)
@@ -255,11 +255,11 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, {"pages_connected": n, "pages_alive": alive, "pages_obj_id": pid_obj, "supervisor_on": SUPERVISOR_ENABLED.get("on", True)})
         elif self.path == "/supervisor_on":
             SUPERVISOR_ENABLED["on"] = True
-            log("监督器已开启(GUI)")
+            log("Supervisor enabled from GUI")
             self._send(200, {"ok": True, "on": True})
         elif self.path == "/supervisor_off":
             SUPERVISOR_ENABLED["on"] = False
-            log("监督器已关闭(GUI)")
+            log("Supervisor disabled from GUI")
             self._send(200, {"ok": True, "on": False})
         elif self.path == "/supervisor_config":
             cfg = load_supervisor_config()
@@ -284,7 +284,7 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     alive = [(pid,p) for pid,p in PAGES.items() if _now()-p["last_poll"]<5]
                     snap = alive and sorted(alive,key=lambda x:-x[1]["last_poll"])[0][1].get("snapshot")
-            self._send(200, snap or {"error":"无快照"})
+            self._send(200, snap or {"error":"no snapshot"})
         elif self.path == "/all_snapshots":
             with LOCK:
                 out = []
@@ -303,7 +303,7 @@ class Handler(BaseHTTPRequestHandler):
             pid = body.get("page_id") or str(uuid.uuid4())[:8]
             with LOCK:
                 PAGES.setdefault(pid, {"info":{}, "queue":queue.Queue()}).update({"info":body, "last_poll":_now()})
-            log(f"注册 {pid}: {body.get('title','')[:40]}")
+            log(f"Registered {pid}: {body.get('title','')[:40]}")
             self._send(200, {"ok":True, "page_id":pid})
 
         elif self.path == "/poll":
@@ -348,16 +348,16 @@ class Handler(BaseHTTPRequestHandler):
                 if pid and pid in PAGES: target=pid
                 else:
                     alive=[p for p in PAGES if _now()-PAGES[p]["last_poll"]<5]
-                    if not alive: return self._send(500, {"error":"无活跃页面"})
+                    if not alive: return self._send(500, {"error":"no active page"})
                     target=alive[0]
             cid = str(uuid.uuid4())[:8]
             with LOCK: PAGES[target]["queue"].put({"id":cid,"cmd":"send","text":text})
-            self._send(200, {"ok": True, "msg": "已入队"})  # 不等result,避免busy卡死阻塞
+            self._send(200, {"ok": True, "msg": "queued"})  # Do not wait for result; avoid blocking when ChatGPT is busy
 
         elif self.path == "/new_chat":
             with LOCK:
                 alive=[p for p in PAGES if _now()-PAGES[p]["last_poll"]<5]
-                if not alive: return self._send(500, {"error":"无活跃页面"})
+                if not alive: return self._send(500, {"error":"no active page"})
                 target=body.get("page_id") or alive[0]
             cid=str(uuid.uuid4())[:8]
             with LOCK: PAGES[target]["queue"].put({"id":cid,"cmd":"new_chat"})
@@ -370,7 +370,7 @@ def _wait(rid, timeout):
     while _now()<deadline:
         if rid in RESULTS: return RESULTS.pop(rid)
         time.sleep(0.2)
-    return {"ok":False, "error":"超时"}
+    return {"ok":False, "error":"timeout"}
 
 
 # ====== 监督器(由 HTTP poll 间接触发,不用独立线程)======
@@ -395,11 +395,11 @@ def supervisor_once():
     _last_supervisor_run[0] = now
 
     if not SUPERVISOR_ENABLED.get("on", True):
-        log("监督器: 已关闭")
+        log("Supervisor: disabled")
         return
     try:
         all_pages = list(PAGES.items())
-        log(f"监督器扫描: PAGES={len(all_pages)}")
+        log(f"Supervisor scan: pages={len(all_pages)}")
         if not all_pages:
             return
         all_pages = list(PAGES.items())
@@ -426,31 +426,31 @@ def supervisor_once():
             if not turns and not last:
                 _clear_in_flight(pid)
                 continue
-            idle_pages.append((pid, turns, last or "(无回复)", snip))
+            idle_pages.append((pid, turns, last or "(no reply)", snip))
 
         if idle_pages:
             gen = sum(1 for _, p in ps if (p.get("snapshot") or {}).get("isGenerating"))
-            log(f"扫描: {len(ps)}页 待处理{len(idle_pages)} 生成中{gen}")
+            log(f"Scan: pages={len(ps)} pending={len(idle_pages)} generating={gen}")
             for pid, turns, last, snip in idle_pages:
                 t = threading.Thread(target=handle_page, args=(pid, turns, last, snip), daemon=True)
                 t.start()
     except Exception as e:
-        log(f"监督器异常: {e}")
+        log(f"Supervisor error: {e}")
 
 
 def handle_page(pid, turns, last_reply, snip):
     """处理单个空闲页面:调 Claude + 发消息。在独立线程跑,不阻塞主循环。"""
-    log(f"页面 {pid} 空闲,调 Claude...")
+    log(f"Page {pid} idle; calling supervisor provider...")
     d = claude_decide(turns, last_reply)
     if d["action"]=="skip":
         reason = d.get('reason','')[:50]
-        log(f"  {pid} 跳过: {reason}")
+        log(f"  {pid} skipped: {reason}")
         # 跳过也临时标记 30 秒(Claude超时)或 90 秒(到长度上限),避免疯狂重试
-        cooldown = 30 if '超时' in reason else 90
+        cooldown = 30 if "timeout" in reason.lower() or "timed out" in reason.lower() else 90
         _mark_handled(pid, snip, cooldown)
         return
     msg = d["message"]
-    log(f"  {pid} Claude建议: {msg[:70]}")
+    log(f"  {pid} supervisor suggestion: {msg[:70]}")
     try:
         cid = str(uuid.uuid4())[:8]
         with LOCK:
@@ -458,7 +458,7 @@ def handle_page(pid, turns, last_reply, snip):
                 PAGES[pid]["queue"].put({"id":cid,"cmd":"send","text":msg})
                 LAST_HANDLED[pid] = {"snippet": snip, "until": _now() + 90}  # 成功后标记,90秒后可重发
             IN_FLIGHT.discard(pid)
-        log(f"  {pid} ✓ 已入队发送")
+        log(f"  {pid} queued for send")
     except Exception as e:
         _clear_in_flight(pid)
         log(f"  {pid} ✗ {e}")
@@ -467,12 +467,12 @@ def handle_page(pid, turns, last_reply, snip):
 def main():
     load_supervisor_config()
     server = ThreadingHTTPServer(("127.0.0.1", HTTP_PORT), Handler)
-    log(f"桥接服务 http://127.0.0.1:{HTTP_PORT} | 监督器由 poll 触发(每{POLL_INTERVAL}s)")
-    log("等待油猴脚本连接...")
+    log(f"Bridge service http://127.0.0.1:{HTTP_PORT} | supervisor triggered by poll every {POLL_INTERVAL}s")
+    log("Waiting for userscript connections...")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
-        log("已停止")
+        log("Stopped")
 
 
 if __name__ == "__main__":
