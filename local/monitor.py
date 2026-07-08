@@ -6,6 +6,8 @@ Read-only monitor. Refreshes every 2 seconds and does not affect the backend.
 启动: python monitor.py
 """
 import json
+import atexit
+import os
 import sys
 import threading
 import time
@@ -21,8 +23,36 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 
 BASE = "http://127.0.0.1:5000"
+MONITOR_LOCK_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "monitor.lock")
 REFRESH_INTERVAL = 2000  # 毫秒
 
+
+
+def acquire_monitor_lock():
+    """Allow only one monitor GUI window per local checkout."""
+    if sys.platform != "win32":
+        return None
+    try:
+        import msvcrt
+        lock_file = open(MONITOR_LOCK_PATH, "a+", encoding="utf-8")
+        msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+        lock_file.seek(0)
+        lock_file.truncate()
+        lock_file.write(str(os.getpid()))
+        lock_file.flush()
+
+        def _release():
+            try:
+                lock_file.seek(0)
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+                lock_file.close()
+            except Exception:
+                pass
+        atexit.register(_release)
+        return lock_file
+    except OSError:
+        print("Monitor GUI is already running; not starting a duplicate window.", flush=True)
+        sys.exit(0)
 
 def fetch(path):
     try:
@@ -280,6 +310,7 @@ class MonitorApp:
 
 
 def main():
+    monitor_lock = acquire_monitor_lock()
     root = tk.Tk()
     app = MonitorApp(root)
     root.mainloop()
@@ -287,4 +318,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

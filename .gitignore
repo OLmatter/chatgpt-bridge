@@ -9,3 +9,5 @@ env/
 .DS_Store
 Thumbs.db
 local/supervisor_config.json
+local/launcher.lock
+local/monitor.lock

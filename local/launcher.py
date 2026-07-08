@@ -3,7 +3,7 @@
 
 Usage: python launcher.py
 """
-import os, sys, time, subprocess, socket
+import os, sys, time, subprocess, socket, atexit
 
 try:
     sys.stdout.reconfigure(encoding="utf-8")
@@ -12,6 +12,34 @@ except Exception:
 
 DIR = os.path.dirname(os.path.abspath(__file__))
 PORT = 5000
+LOCK_PATH = os.path.join(DIR, "launcher.lock")
+
+
+def acquire_launcher_lock():
+    """Prevent two launchers from starting/killing processes at the same time."""
+    if sys.platform != "win32":
+        return None
+    try:
+        import msvcrt
+        lock_file = open(LOCK_PATH, "a+", encoding="utf-8")
+        msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+        lock_file.seek(0)
+        lock_file.truncate()
+        lock_file.write(str(os.getpid()))
+        lock_file.flush()
+
+        def _release():
+            try:
+                lock_file.seek(0)
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+                lock_file.close()
+            except Exception:
+                pass
+        atexit.register(_release)
+        return lock_file
+    except OSError:
+        print("Another launcher is already running. Reuse the existing window instead of starting a second one.")
+        sys.exit(2)
 
 
 def kill_pid(pid):
@@ -58,6 +86,21 @@ def find_process_pids_by_script(script_name):
     return list(set(pids))
 
 
+def api_ok(port):
+    """Return True only when the bridge API is responding."""
+    try:
+        import urllib.request
+        urllib.request.urlopen(f"http://127.0.0.1:{port}/status", timeout=2).read()
+        return True
+    except Exception:
+        try:
+            import urllib.request
+            urllib.request.urlopen(f"http://127.0.0.1:{port}/supervisor_config", timeout=2).read()
+            return True
+        except Exception:
+            return False
+
+
 def is_port_up(port):
     """检查端口是否在监听。"""
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -71,76 +114,103 @@ def is_port_up(port):
 
 
 def main():
+    launcher_lock = acquire_launcher_lock()
     print("=" * 50)
     print("  ChatGPT Bridge Launcher")
     print("=" * 50)
 
-    # === Step 1: 杀旧后端(占端口的所有PID + 所有跑run_all.py的残留) ===
-    print("\n[1/5] Preflight: stopping old backend processes...")
+    # === Step 1: 后端单实例检查。健康的旧后端直接复用,不要反复杀/重启 ===
+    print("\n[1/5] Backend singleton preflight...")
     port_pids = find_port_pids(PORT)
     run_pids = find_process_pids_by_script("run_all.py")
-    all_backend_pids = list(set(port_pids + run_pids))
-    if all_backend_pids:
-        for pid in all_backend_pids:
-            print(f"  Stopping backend PID {pid}")
+    backend = None
+    reused_backend_pid = None
+
+    if len(port_pids) == 1 and api_ok(PORT):
+        reused_backend_pid = port_pids[0]
+        print(f"  Reusing healthy backend PID {reused_backend_pid}")
+        stale_run_pids = [pid for pid in run_pids if pid != reused_backend_pid]
+        for pid in stale_run_pids:
+            print(f"  Stopping stale backend PID {pid}")
             kill_pid(pid)
-        time.sleep(3)
-    else:
-        print(f"  No old backend found")
-
-    # === Step 2: 杀旧监控 ===
-    print("\n[2/5] Preflight: stopping old monitor processes...")
-    mon_pids = find_process_pids_by_script("monitor.py")
-    for pid in mon_pids:
-        print(f"  Stopping old monitor PID {pid}")
-        kill_pid(pid)
-    if not mon_pids:
-        print("  No old monitor found")
-    time.sleep(1)
-
-    # === Step 3: 确认端口释放 ===
-    print("\n[3/5] Checking port release...")
-    for i in range(5):
-        if not find_port_pids(PORT):
-            print(f"  Port {PORT} is free")
-            break
-        print(f"  Port still busy, waiting...({i+1}/5)")
-        time.sleep(2)
-    else:
-        print(f"  WARNING: port {PORT} is still busy; continuing anyway")
-
-    # === Step 4: 启动后端 ===
-    print("\n[4/5] Starting backend...")
-    backend = subprocess.Popen(
-        [sys.executable, "run_all.py"],
-        cwd=DIR,
-        creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0,
-    )
-    # 等后端起来
-    ok = False
-    for i in range(10):
         time.sleep(1)
-        if is_port_up(PORT):
-            ok = True
-            break
-    if ok:
-        print(f"  OK: backend started (PID {backend.pid}); port {PORT} is listening")
     else:
-        print(f"  ERROR: backend failed to start")
-        return
+        all_backend_pids = list(set(port_pids + run_pids))
+        if all_backend_pids:
+            print("  Existing backend is missing, unhealthy, or duplicated; cleaning it first...")
+            for proc_id in all_backend_pids:
+                print(f"  Stopping backend PID {proc_id}")
+                kill_pid(proc_id)
+            time.sleep(3)
+        else:
+            print("  No old backend found")
 
-    # === Step 5: 启动监控 ===
-    print("\n[5/5] Starting monitor GUI...")
-    monitor = subprocess.Popen(
-        [sys.executable, "monitor.py"],
-        cwd=DIR,
-        creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0,
-    )
-    time.sleep(2)
-    if monitor.poll() is None:
-        print(f"  OK: monitor GUI started (PID {monitor.pid})")
+    # === Step 2: 确认端口释放或健康复用 ===
+    print("\n[2/5] Checking backend state...")
+    if reused_backend_pid:
+        print(f"  Port {PORT} is already owned by healthy backend PID {reused_backend_pid}")
     else:
-        print(f"  ERROR: monitor GUI failed to start")
+        for i in range(5):
+            if not find_port_pids(PORT):
+                print(f"  Port {PORT} is free")
+                break
+            print(f"  Port still busy, waiting...({i+1}/5)")
+            time.sleep(2)
+        else:
+            print(f"  ERROR: port {PORT} is still busy; not starting a second backend")
+            return
+
+    # === Step 3: 启动或复用后端 ===
+    print("\n[3/5] Starting or reusing backend...")
+    if not reused_backend_pid:
+        backend = subprocess.Popen(
+            [sys.executable, "run_all.py"],
+            cwd=DIR,
+            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0,
+        )
+        ok = False
+        for i in range(10):
+            time.sleep(1)
+            if is_port_up(PORT) and api_ok(PORT):
+                ok = True
+                break
+        if ok:
+            print(f"  OK: backend started (PID {backend.pid}); port {PORT} is listening")
+        else:
+            print("  ERROR: backend failed to start")
+            return
+    else:
+        print("  OK: backend reused; no second backend started")
+
+    # === Step 4: 监控 GUI 单实例。已有窗口就复用,多余窗口只保留一个 ===
+    print("\n[4/5] Monitor GUI singleton preflight...")
+    mon_pids = find_process_pids_by_script("monitor.py")
+    monitor = None
+    reused_monitor_pid = mon_pids[0] if mon_pids else None
+    if reused_monitor_pid:
+        print(f"  Reusing monitor GUI PID {reused_monitor_pid}")
+        for proc_id in mon_pids[1:]:
+            print(f"  Stopping duplicate monitor PID {proc_id}")
+            kill_pid(proc_id)
+        time.sleep(1)
+    else:
+        print("  No old monitor found")
+
+    # === Step 5: 启动或复用监控 ===
+    print("\n[5/5] Starting or reusing monitor GUI...")
+    if not reused_monitor_pid:
+        monitor = subprocess.Popen(
+            [sys.executable, "monitor.py"],
+            cwd=DIR,
+            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0,
+        )
+        time.sleep(2)
+        if monitor.poll() is None:
+            print(f"  OK: monitor GUI started (PID {monitor.pid})")
+        else:
+            print("  ERROR: monitor GUI failed to start")
+    else:
+        print("  OK: monitor GUI reused; no second GUI started")
 
     # === 最终自检 ===
     print("\n" + "=" * 50)
@@ -151,7 +221,7 @@ def main():
     print(f"    Backend(5000): {'OK running' if backend_ok else 'ERROR not running'}")
 
     # 监控
-    monitor_ok = monitor.poll() is None
+    monitor_ok = (monitor.poll() is None) if monitor else bool(reused_monitor_pid)
     print(f"    Monitor GUI:   {'OK running' if monitor_ok else 'ERROR not running'}")
 
     # 端口只有一个进程
@@ -170,7 +240,8 @@ def main():
 
     # 残留进程检查
     leftover_mon = find_process_pids_by_script("monitor.py")
-    leftover_mon = [p for p in leftover_mon if str(p) != str(monitor.pid)]
+    active_monitor_pid = str(monitor.pid) if monitor else str(reused_monitor_pid)
+    leftover_mon = [p for p in leftover_mon if str(p) != active_monitor_pid]
     if leftover_mon:
         print(f"    WARNING: leftover monitors: {leftover_mon}")
     else:
@@ -185,4 +256,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
