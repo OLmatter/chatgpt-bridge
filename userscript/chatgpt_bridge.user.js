@@ -94,6 +94,17 @@ const POLL_INTERVAL = 400;                      // 轮询间隔(ms)
     return false;
   }
 
+  function hasConversationLimit() {
+    const text = (document.body && document.body.innerText ? document.body.innerText : '').toLowerCase();
+    return text.includes("you've reached the maximum length for this conversation")
+      || text.includes('you have reached the maximum length for this conversation')
+      || text.includes('maximum length for this conversation')
+      || text.includes('starting a new chat')
+      || text.includes('start a new chat')
+      || text.includes('达到此对话的最大长度')
+      || text.includes('对话的最大长度');
+  }
+
   function getSnapshot() {
     const editor = getEditor();
     const turns = document.querySelectorAll('[data-message-author-role]');
@@ -116,6 +127,7 @@ const POLL_INTERVAL = 400;                      // 轮询间隔(ms)
       editorText: editor ? (editor.innerText || editor.value || '').slice(0, 200) : '',
       assistantCount: msgs.length,
       isGenerating: isGenerating(),
+      conversationLimited: hasConversationLimit(),
       recentTurns: recent,
       lastAssistant,
     };
@@ -226,9 +238,9 @@ const POLL_INTERVAL = 400;                      // 轮询间隔(ms)
         }
         // Show running state while busy; otherwise show ready state.
         if (busy) {
-          setStatus('执行中...' + (snap ? ` (${snap.assistantCount}条 ${snap.isGenerating ? '⏳' : ''})` : ''), '#c83');
+          setStatus('running...' + (snap ? ` (${snap.assistantCount} msg${snap.assistantCount === 1 ? '' : 's'} ${snap.isGenerating ? '...' : ''})` : ''), '#c83');
         } else {
-          setStatus('就绪' + (snap ? ` (${snap.assistantCount}条)` : ''), '#2a2');
+          setStatus('ready' + (snap ? ` (${snap.assistantCount} msg${snap.assistantCount === 1 ? '' : 's'})` : ''), '#2a2');
         }
       } catch (e) {
         setStatus('waiting for service...', '#c33');
@@ -269,11 +281,10 @@ const POLL_INTERVAL = 400;                      // 轮询间隔(ms)
   });
 
   // ====== 启动 ======
-  setStatus('连接中...', '#c83');
+  setStatus('connecting...', '#c83');
   gmFetch('POST', '/register', { page_id: PAGE_ID, url: location.href, title: document.title })
     .then(() => setStatus('ready', '#2a2'))
-    .catch(() => setStatus('服务未启动', '#c33'));
+    .catch(() => setStatus('service offline', '#c33'));
   poll();
   console.log('[ChatGPT Bridge] loaded, backend:', BASE, 'page id:', PAGE_ID);
 })();
-

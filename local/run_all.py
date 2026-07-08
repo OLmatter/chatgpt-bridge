@@ -60,13 +60,14 @@ DEFAULT_BANNED_WORDS = ["稳", "保守", "求稳", "稳妥"]
 DEFAULT_PROVIDER = "claude_cli"
 DEFAULT_API_URL = ""
 DEFAULT_API_MODEL = "gpt-4o-mini"
-SUPERVISOR_CONFIG = {"prompt": DEFAULT_SUPERVISOR_PROMPT, "banned_words": list(DEFAULT_BANNED_WORDS), "provider": DEFAULT_PROVIDER, "api_url": DEFAULT_API_URL, "api_model": DEFAULT_API_MODEL, "api_key": ""}
+DEFAULT_FALLBACK_REPLY = "Continue"
+SUPERVISOR_CONFIG = {"prompt": DEFAULT_SUPERVISOR_PROMPT, "banned_words": list(DEFAULT_BANNED_WORDS), "provider": DEFAULT_PROVIDER, "api_url": DEFAULT_API_URL, "api_model": DEFAULT_API_MODEL, "api_key": "", "fallback_reply": DEFAULT_FALLBACK_REPLY}
 
 
 def load_supervisor_config():
     """Load supervisor config from local JSON, falling back to defaults."""
     global SUPERVISOR_CONFIG
-    cfg = {"prompt": DEFAULT_SUPERVISOR_PROMPT, "banned_words": list(DEFAULT_BANNED_WORDS), "provider": DEFAULT_PROVIDER, "api_url": DEFAULT_API_URL, "api_model": DEFAULT_API_MODEL, "api_key": ""}
+    cfg = {"prompt": DEFAULT_SUPERVISOR_PROMPT, "banned_words": list(DEFAULT_BANNED_WORDS), "provider": DEFAULT_PROVIDER, "api_url": DEFAULT_API_URL, "api_model": DEFAULT_API_MODEL, "api_key": "", "fallback_reply": DEFAULT_FALLBACK_REPLY}
     try:
         if os.path.exists(CONFIG_PATH):
             with open(CONFIG_PATH, "r", encoding="utf-8") as f:
@@ -83,13 +84,15 @@ def load_supervisor_config():
                 cfg["api_model"] = data["api_model"].strip()
             if isinstance(data.get("api_key"), str):
                 cfg["api_key"] = data["api_key"]
+            if isinstance(data.get("fallback_reply"), str) and data["fallback_reply"].strip():
+                cfg["fallback_reply"] = data["fallback_reply"].strip()
     except Exception as e:
         log(f"Config load failed, using defaults: {e}")
     SUPERVISOR_CONFIG = cfg
     return cfg
 
 
-def save_supervisor_config(prompt=None, banned_words=None, provider=None, api_url=None, api_model=None, api_key=None, clear_api_key=False):
+def save_supervisor_config(prompt=None, banned_words=None, provider=None, api_url=None, api_model=None, api_key=None, clear_api_key=False, fallback_reply=None):
     """Persist supervisor config and update in-memory settings."""
     global SUPERVISOR_CONFIG
     cfg = dict(SUPERVISOR_CONFIG)
@@ -107,6 +110,8 @@ def save_supervisor_config(prompt=None, banned_words=None, provider=None, api_ur
         cfg["api_key"] = ""
     elif api_key is not None and str(api_key).strip():
         cfg["api_key"] = str(api_key).strip()
+    if fallback_reply is not None and str(fallback_reply).strip():
+        cfg["fallback_reply"] = str(fallback_reply).strip()
     with open(CONFIG_PATH, "w", encoding="utf-8") as f:
         json.dump(cfg, f, ensure_ascii=False, indent=2)
     SUPERVISOR_CONFIG = cfg
@@ -207,7 +212,7 @@ def claude_decide(recent_turns, last_reply):
         prompt = f"{template}\n\n=== Conversation ===\n{convo}\n=== Decision ==="
     result = ask_openai_compatible(prompt, cfg) if cfg.get("provider") == "openai_compatible" else ask_claude(prompt)
     if result is None:
-        return {"action": "skip", "reason": "supervisor provider timed out or failed; will retry later"}
+        return {"action": "reply", "message": cfg.get("fallback_reply", DEFAULT_FALLBACK_REPLY)}
     if result.upper().startswith("SKIP"):
         return {"action": "skip", "reason": result}
     lines = result.split("\n")
@@ -387,6 +392,38 @@ def _clear_in_flight(pid: str) -> None:
     with LOCK:
         IN_FLIGHT.discard(pid)
 
+
+def _snapshot_is_limited(snap: dict) -> bool:
+    """Return True when ChatGPT says this conversation must move to a new chat."""
+    if not snap:
+        return False
+    if snap.get("conversationLimited"):
+        return True
+    haystack = "\n".join(
+        str(snap.get(k, ""))
+        for k in ("editorText", "lastAssistant", "title", "url")
+    ).lower()
+    for turn in snap.get("recentTurns", []) or []:
+        haystack += "\n" + str(turn.get("text", "")).lower()
+    markers = (
+        "maximum length for this conversation",
+        "start a new chat",
+        "starting a new chat",
+        "达到此对话的最大长度",
+        "对话的最大长度",
+    )
+    return any(marker in haystack for marker in markers)
+
+
+def _snapshot_snippet(snap: dict) -> str:
+    last = snap.get("lastAssistant", "") if snap else ""
+    if last:
+        return last[-80:]
+    if _snapshot_is_limited(snap):
+        return "conversation length limit"
+    return "empty"
+
+
 def supervisor_once():
     """监督器单次扫描。由油猴 poll 时触发(每 POLL_INTERVAL 秒最多跑一次)。"""
     now = _now()
@@ -414,7 +451,7 @@ def supervisor_once():
             if snap.get("isGenerating"):
                 continue
             last = snap.get("lastAssistant", "")
-            snip = last[-80:] if last else "empty"
+            snip = _snapshot_snippet(snap)
             turns = snap.get("recentTurns", [])
             with LOCK:
                 if pid in IN_FLIGHT:
@@ -425,6 +462,10 @@ def supervisor_once():
                 IN_FLIGHT.add(pid)
             if not turns and not last:
                 _clear_in_flight(pid)
+                continue
+            if _snapshot_is_limited(snap):
+                log(f"  {pid} skipped: conversation length limit")
+                _mark_handled(pid, snip, 3600)
                 continue
             idle_pages.append((pid, turns, last or "(no reply)", snip))
 
