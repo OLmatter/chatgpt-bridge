@@ -2,7 +2,7 @@
 // @name         ChatGPT WebUI Bridge
 // @namespace    https://github.com/yourname/chatgpt-bridge
 // @version      1.0.0
-// @description  把已登录的 ChatGPT 页面通过 HTTP 桥接暴露给本地 agent。支持多窗口、快照回传、自动重连。
+// @description  Expose logged-in ChatGPT pages to a local agent through an HTTP bridge. Supports multiple tabs, snapshots, and auto-reconnect.
 // @author       You
 // @match        https://chatgpt.com/*
 // @match        https://chat.openai.com/*
@@ -14,14 +14,14 @@
 // ==/UserScript==
 
 // ====================== 配置(按需修改) ======================
-const BACKEND_URL = 'http://127.0.0.1:5000';  // 后端地址
+const BACKEND_URL = 'http://127.0.0.1:5000';  // Backend URL
 const POLL_INTERVAL = 400;                      // 轮询间隔(ms)
 // =============================================================
 
 (function () {
   'use strict';
 
-  // 只在主页面运行,不在 iframe(如 sentinel frame)里跑
+  // Run only in the main page, not inside iframes such as sentinel frames.
   if (window.top !== window.self) return;
 
   const BASE = BACKEND_URL;
@@ -59,7 +59,7 @@ const POLL_INTERVAL = 400;                      // 轮询间隔(ms)
   }
   const PAGE_ID = genPageId();
 
-  // ====== 状态标签(页面右上角)======
+  // ====== Status badge (top-right corner) ======
   const badge = document.createElement('div');
   badge.style.cssText = `
     position: fixed; top: 10px; right: 10px; z-index: 999999;
@@ -67,7 +67,7 @@ const POLL_INTERVAL = 400;                      // 轮询间隔(ms)
     border-radius: 12px; font: 12px monospace; opacity: 0.85;
     box-shadow: 0 2px 8px rgba(0,0,0,0.3); pointer-events: none;
   `;
-  badge.textContent = 'Bridge: 启动中';
+  badge.textContent = 'Bridge: starting';
   document.body.appendChild(badge);
 
   function setStatus(text, color) {
@@ -75,7 +75,7 @@ const POLL_INTERVAL = 400;                      // 轮询间隔(ms)
     badge.style.background = color || '#888';
   }
 
-  // ====== 页面快照(回传给后端)======
+  // ====== Page snapshot sent back to backend ======
   function getEditor() {
     return document.querySelector('div[contenteditable="true"][role="textbox"]')
         || document.querySelector('textarea[name="prompt-textarea"]')
@@ -134,7 +134,7 @@ const POLL_INTERVAL = 400;                      // 轮询间隔(ms)
   // ====== 命令执行 ======
   async function sendMessage(text) {
     const editor = getEditor();
-    if (!editor) throw new Error('找不到输入框(未登录?)');
+    if (!editor) throw new Error('input editor not found (not logged in?)');
     const before = countAssistant();
     editor.focus();
     await sleep(150);
@@ -147,7 +147,7 @@ const POLL_INTERVAL = 400;                      // 轮询间隔(ms)
       document.execCommand('insertText', false, text);
     }
     await sleep(400);
-    // Enter 发送,2秒后检查是否成功,失败则点发送按钮兜底
+    // Press Enter to send. If that fails, click the send button as fallback after 2 seconds.
     editor.dispatchEvent(new KeyboardEvent('keydown', {
       key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true,
     }));
@@ -198,7 +198,7 @@ const POLL_INTERVAL = 400;                      // 轮询间隔(ms)
   async function processCommand(cmd) {
     if (cmd.cmd === 'send') return { ok: true, reply: await sendMessage(cmd.text) };
     if (cmd.cmd === 'new_chat') return { ok: true, result: newChat() };
-    return { ok: false, error: 'unknown: ' + cmd.cmd };
+    return { ok: false, error: 'unknown command: ' + cmd.cmd };
   }
 
   function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
@@ -211,27 +211,27 @@ const POLL_INTERVAL = 400;                      // 轮询间隔(ms)
       try {
         // 强制 busy 复位:超过 60 秒说明卡死了
         if (busy && Date.now() - busySince > 60000) {
-          console.log('[Bridge] busy 超时强制复位');
+          console.log('[Bridge] busy timeout; forcing reset');
           busy = false;
         }
-        // 始终回传快照(即使 busy,让后端看到生成进度和页面状态)
+        // Always send snapshots back, even while busy, so backend can see generation progress and page state.
         const snap = getSnapshot();
         const resp = await gmFetch('POST', '/poll', { page_id: PAGE_ID, snapshot: snap });
         if (resp && resp.cmd && !busy) {
           busy = true;
           busySince = Date.now();
-          setStatus('执行: ' + (resp.cmd === 'send' ? '发送' : resp.cmd), '#c83');
+          setStatus('running: ' + (resp.cmd === 'send' ? 'send' : resp.cmd), '#c83');
           // 关键:命令处理放独立异步函数,不阻塞 poll 循环
           executeCommand(resp);
         }
-        // busy 时显示执行中,否则显示就绪
+        // Show running state while busy; otherwise show ready state.
         if (busy) {
           setStatus('执行中...' + (snap ? ` (${snap.assistantCount}条 ${snap.isGenerating ? '⏳' : ''})` : ''), '#c83');
         } else {
           setStatus('就绪' + (snap ? ` (${snap.assistantCount}条)` : ''), '#2a2');
         }
       } catch (e) {
-        setStatus('等待服务...', '#c33');
+        setStatus('waiting for service...', '#c33');
       }
       await sleep(POLL_INTERVAL);
     }
@@ -254,25 +254,26 @@ const POLL_INTERVAL = 400;                      // 轮询间隔(ms)
     }
   }
 
-  // ====== 抗节流:页面重新可见时立即恢复 ======
+  // ====== Anti-throttling: recover immediately when the page becomes visible ======
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden && !busy) {
       gmFetch('POST', '/poll', { page_id: PAGE_ID, snapshot: getSnapshot() }).catch(() => {});
-      setStatus('就绪(恢复)', '#2a2');
+      setStatus('ready (resumed)', '#2a2');
     }
   });
   window.addEventListener('pageshow', (e) => {
     if (e.persisted) {
       gmFetch('POST', '/register', { page_id: PAGE_ID, url: location.href, title: document.title }).catch(() => {});
-      setStatus('就绪(BFCache)', '#2a2');
+      setStatus('ready (BFCache)', '#2a2');
     }
   });
 
   // ====== 启动 ======
   setStatus('连接中...', '#c83');
   gmFetch('POST', '/register', { page_id: PAGE_ID, url: location.href, title: document.title })
-    .then(() => setStatus('就绪', '#2a2'))
+    .then(() => setStatus('ready', '#2a2'))
     .catch(() => setStatus('服务未启动', '#c33'));
   poll();
-  console.log('[ChatGPT Bridge] 已加载, 后端:', BASE, '页面ID:', PAGE_ID);
+  console.log('[ChatGPT Bridge] loaded, backend:', BASE, 'page id:', PAGE_ID);
 })();
+

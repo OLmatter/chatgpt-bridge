@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""ChatGPT Bridge 监控 GUI(ttkinter 小窗口)。
+"""ChatGPT Bridge monitor GUI (small tkinter window).
 
-纯只读监控,不影响后端。每 2 秒刷新。
+Read-only monitor. Refreshes every 2 seconds and does not affect the backend.
 
 启动: python monitor.py
 """
@@ -35,14 +35,14 @@ def fetch(path):
 class MonitorApp:
     def __init__(self, root):
         self.root = root
-        root.title("ChatGPT Bridge 监控")
+        root.title("ChatGPT Bridge Monitor")
         root.geometry("560x440")
         root.minsize(480, 300)
 
         # 顶部状态栏
         top = ttk.Frame(root, padding=8)
         top.pack(fill=tk.X)
-        self.lbl_status = ttk.Label(top, text="连接中...", font=("Consolas", 10, "bold"))
+        self.lbl_status = ttk.Label(top, text="Connecting...", font=("Consolas", 10, "bold"))
         self.lbl_status.pack(side=tk.LEFT)
         self.lbl_sup = ttk.Label(top, text="", font=("Consolas", 9))
         self.lbl_sup.pack(side=tk.RIGHT)
@@ -77,14 +77,14 @@ class MonitorApp:
         bottom = ttk.Frame(root, padding=(8, 0, 8, 8))
         bottom.pack(fill=tk.X)
         self.var_pause = tk.BooleanVar(value=False)
-        ttk.Checkbutton(bottom, text="暂停刷新", variable=self.var_pause).pack(side=tk.LEFT)
+        ttk.Checkbutton(bottom, text="Pause refresh", variable=self.var_pause).pack(side=tk.LEFT)
 
-        # 自动回复开关
+        # Auto-reply toggle
         self.var_autoreply = tk.BooleanVar(value=True)
-        self.btn_autoreply = ttk.Checkbutton(bottom, text="自动回复", variable=self.var_autoreply, command=self._toggle_autoreply)
+        self.btn_autoreply = ttk.Checkbutton(bottom, text="Auto-reply", variable=self.var_autoreply, command=self._toggle_autoreply)
         self.btn_autoreply.pack(side=tk.LEFT, padx=(15, 0))
 
-        ttk.Label(bottom, text="每2s刷新", font=("Consolas", 8), foreground="#999").pack(side=tk.RIGHT)
+        ttk.Label(bottom, text="Refresh every 2s", font=("Consolas", 8), foreground="#999").pack(side=tk.RIGHT)
 
         # 记录每个页面进入当前状态的时间(用于算累积时长)
         # key: page_id, value: (状态名, 进入时刻)
@@ -93,14 +93,14 @@ class MonitorApp:
         self._refresh()
 
     def _toggle_autoreply(self):
-        """开关自动回复。"""
+        """Toggle auto-reply."""
         if self.var_autoreply.get():
             fetch("/supervisor_on")
         else:
             fetch("/supervisor_off")
 
     def _refresh(self):
-        """定时刷新(在主线程跑,线程安全)。"""
+        """Periodic refresh on the main thread."""
         if not self.var_pause.get():
             self._update()
         self.root.after(REFRESH_INTERVAL, self._refresh)
@@ -110,7 +110,7 @@ class MonitorApp:
         data = fetch("/all_snapshots")
 
         if status is None and data is None:
-            self.lbl_status.config(text="● 后端未连接", foreground="#cc3333")
+            self.lbl_status.config(text="● Backend disconnected", foreground="#cc3333")
             self.lbl_sup.config(text="")
             return
 
@@ -186,7 +186,7 @@ class MonitorApp:
             foreground="#333333",
         )
         self.lbl_sup.config(
-            text=f"自动回复 {'✓开' if sup_on else '✗关'}",
+            text=f"Auto-reply {'✓ on' if sup_on else '✗ off'}",
             foreground="#2a8a2a" if sup_on else "#cc3333",
         )
 
@@ -199,3 +199,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
