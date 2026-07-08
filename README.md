@@ -107,7 +107,7 @@ Edit `config.yaml`:
 - `supervisor.enabled`: whether the supervisor starts automatically.
 - `supervisor.prompt`: prompt template for Claude supervisor decisions.
 - `supervisor.banned_words`: words removed from supervisor replies.
-- Local GUI prompt editor: run `cd local && python launcher.py`, click `Prompt...`, edit the prompt text box, and save. The local override is stored in `local/supervisor_config.json`. The text can be edited freely, but keep the `REPLY`/`SKIP` output format for reliable behavior. Keeping `{convo}` is recommended because it marks where recent turns are inserted; if `{convo}` is removed, the backend appends the conversation automatically. The monitor GUI defaults to English and includes a Language dropdown for English/中文; the selection is saved in `local/monitor_config.json`. Changes apply to the next auto-reply.
+- Local GUI prompt editor: run `cd local && python launcher.py`, click `Prompt...`, edit the prompt text box, and save. The local override is stored in `local/supervisor_config.json`. The text can be edited freely, but keep the `REPLY`/`SKIP` output format for reliable behavior. Keeping `{convo}` is recommended because it marks where recent turns are inserted; if `{convo}` is removed, the backend appends the conversation automatically. The monitor GUI defaults to English and includes a Language dropdown for English/中文; the selection is saved in `local/monitor_config.json`. In the same Prompt window, choose either Claude CLI or OpenAI-compatible API. API mode accepts an API Base URL, API key, and model; the key is stored only in the local ignored config file and is never returned by the config GET endpoint. Changes apply to the next auto-reply.
 
 ### Project Layout
 
@@ -244,7 +244,7 @@ python run_all.py
 - `supervisor.enabled`：是否启动时自动开启监督器。
 - `supervisor.prompt`：Claude 监督器提示词。
 - `supervisor.banned_words`：自动删除的禁用词。
-- 本地 GUI 提示词编辑器：运行 `cd local && python launcher.py`，点击 `Prompt...`，在文本框里编辑并保存。覆盖配置会保存到 `local/supervisor_config.json`。文本内容可以自由改，但建议保留 `REPLY`/`SKIP` 输出格式，行为最稳定；也建议保留 `{convo}`，它表示插入最近对话的位置。如果删除 `{convo}`，后端会自动把对话追加到 prompt 后面。监控 GUI 默认英文，并提供 Language 下拉切换 English/中文；选择会保存到 `local/monitor_config.json`。修改会从下一次自动回复开始生效。
+- 本地 GUI 提示词编辑器：运行 `cd local && python launcher.py`，点击 `Prompt...`，在文本框里编辑并保存。覆盖配置会保存到 `local/supervisor_config.json`。文本内容可以自由改，但建议保留 `REPLY`/`SKIP` 输出格式，行为最稳定；也建议保留 `{convo}`，它表示插入最近对话的位置。如果删除 `{convo}`，后端会自动把对话追加到 prompt 后面。监控 GUI 默认英文，并提供 Language 下拉切换 English/中文；选择会保存到 `local/monitor_config.json`。同一个 Prompt 窗口里可选择 Claude CLI 或 OpenAI 兼容 API；API 模式填写 API Base URL、API key 和 model，key 只保存在本地已忽略的配置文件里，配置 GET 接口不会回显 key。修改会从下一次自动回复开始生效。
 
 ### 项目结构
 

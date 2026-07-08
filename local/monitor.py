@@ -89,6 +89,15 @@ TEXT = {
         "prompt_saved": "Prompt saved. The next auto-reply will use it.",
         "save_failed": "Save failed: {error}",
         "reset_failed": "Reset failed.",
+        "provider": "Provider:",
+        "provider_cli": "Claude CLI",
+        "provider_api": "OpenAI-compatible API",
+        "api_url": "API Base URL:",
+        "api_model": "Model:",
+        "api_key": "API key:",
+        "api_key_hint": "Leave blank to keep saved key.",
+        "api_key_saved": "saved key present",
+        "clear_api_key": "Clear saved API key",
     },
     "zh": {
         "connecting": "连接中...",
@@ -122,10 +131,21 @@ TEXT = {
         "prompt_saved": "提示词已保存，下一次自动回复会使用它。",
         "save_failed": "保存失败：{error}",
         "reset_failed": "恢复默认失败。",
+        "provider": "提供方：",
+        "provider_cli": "Claude CLI",
+        "provider_api": "OpenAI 兼容 API",
+        "api_url": "API Base URL：",
+        "api_model": "模型：",
+        "api_key": "API key：",
+        "api_key_hint": "留空表示保留已保存的 key。",
+        "api_key_saved": "已保存 key",
+        "clear_api_key": "清除已保存 API key",
     },
 }
 
 LANG_OPTIONS = {"English": "en", "中文": "zh"}
+PROVIDER_OPTIONS = {"Claude CLI": "claude_cli", "OpenAI-compatible API": "openai_compatible"}
+PROVIDER_LABELS = {v: k for k, v in PROVIDER_OPTIONS.items()}
 LANG_LABELS = {v: k for k, v in LANG_OPTIONS.items()}
 
 
@@ -262,17 +282,27 @@ class MonitorApp:
             return None
         return cfg
 
-    def _save_prompt_config(self, win, text_widget, banned_entry):
+    def _save_prompt_config(self, win, text_widget, banned_entry, provider_combo, api_url_entry, api_model_entry, api_key_entry, clear_key_var):
         prompt = text_widget.get("1.0", tk.END).strip()
         banned_words = [x.strip() for x in banned_entry.get().split(",") if x.strip()]
-        result = post_json("/supervisor_config", {"prompt": prompt, "banned_words": banned_words})
+        provider = "openai_compatible" if provider_combo.get() == self.t["provider_api"] else "claude_cli"
+        payload = {
+            "prompt": prompt,
+            "banned_words": banned_words,
+            "provider": provider,
+            "api_url": api_url_entry.get().strip(),
+            "api_model": api_model_entry.get().strip(),
+            "api_key": api_key_entry.get().strip(),
+            "clear_api_key": clear_key_var.get(),
+        }
+        result = post_json("/supervisor_config", payload)
         if result and result.get("ok"):
             messagebox.showinfo(self.t["prompt_title"], self.t["prompt_saved"])
             win.destroy()
         else:
-            messagebox.showerror(self.t["prompt_title"], self.t["save_failed"].format(error=(result or {}).get('error', 'unknown error')))
+            messagebox.showerror(self.t["prompt_title"], self.t["save_failed"].format(error=(result or {}).get("error", "unknown error")))
 
-    def _reset_prompt_config(self, text_widget, banned_entry):
+    def _reset_prompt_config(self, text_widget, banned_entry, provider_combo=None, api_url_entry=None, api_model_entry=None, api_key_entry=None, clear_key_var=None):
         cfg = fetch("/supervisor_config/reset")
         if not cfg or not cfg.get("ok"):
             messagebox.showerror(self.t["prompt_title"], self.t["reset_failed"])
@@ -281,6 +311,18 @@ class MonitorApp:
         text_widget.insert("1.0", cfg.get("prompt", ""))
         banned_entry.delete(0, tk.END)
         banned_entry.insert(0, ", ".join(cfg.get("banned_words", [])))
+        if provider_combo is not None:
+            provider_combo.set(self.t["provider_api"] if cfg.get("provider", "claude_cli") == "openai_compatible" else self.t["provider_cli"])
+        if api_url_entry is not None:
+            api_url_entry.delete(0, tk.END)
+            api_url_entry.insert(0, cfg.get("api_url", ""))
+        if api_model_entry is not None:
+            api_model_entry.delete(0, tk.END)
+            api_model_entry.insert(0, cfg.get("api_model", ""))
+        if api_key_entry is not None:
+            api_key_entry.delete(0, tk.END)
+        if clear_key_var is not None:
+            clear_key_var.set(False)
 
     def _edit_prompt(self):
         cfg = self._load_prompt_config()
@@ -312,6 +354,31 @@ class MonitorApp:
         scroll.pack(side=tk.RIGHT, fill=tk.Y)
         text_widget.insert("1.0", cfg.get("prompt", ""))
 
+        settings_frame = ttk.LabelFrame(win, text=self.t["provider"], padding=(10, 6, 10, 8))
+        settings_frame.pack(fill=tk.X, padx=10, pady=(0, 8))
+        ttk.Label(settings_frame, text=self.t["provider"]).grid(row=0, column=0, sticky=tk.W)
+        provider_combo = ttk.Combobox(settings_frame, values=[self.t["provider_cli"], self.t["provider_api"]], width=26, state="readonly")
+        provider_combo.set(self.t["provider_api"] if cfg.get("provider", "claude_cli") == "openai_compatible" else self.t["provider_cli"])
+        provider_combo.grid(row=0, column=1, sticky=tk.W, padx=(8, 12))
+        ttk.Label(settings_frame, text=self.t["api_model"]).grid(row=0, column=2, sticky=tk.W)
+        api_model_entry = ttk.Entry(settings_frame, width=24)
+        api_model_entry.grid(row=0, column=3, sticky=tk.EW, padx=(8, 0))
+        api_model_entry.insert(0, cfg.get("api_model", ""))
+
+        ttk.Label(settings_frame, text=self.t["api_url"]).grid(row=1, column=0, sticky=tk.W, pady=(6, 0))
+        api_url_entry = ttk.Entry(settings_frame)
+        api_url_entry.grid(row=1, column=1, columnspan=3, sticky=tk.EW, padx=(8, 0), pady=(6, 0))
+        api_url_entry.insert(0, cfg.get("api_url", ""))
+
+        ttk.Label(settings_frame, text=self.t["api_key"]).grid(row=2, column=0, sticky=tk.W, pady=(6, 0))
+        api_key_entry = ttk.Entry(settings_frame, show="*")
+        api_key_entry.grid(row=2, column=1, columnspan=2, sticky=tk.EW, padx=(8, 0), pady=(6, 0))
+        key_note = self.t["api_key_saved"] if cfg.get("api_key_set") else self.t["api_key_hint"]
+        ttk.Label(settings_frame, text=key_note, foreground="#666").grid(row=2, column=3, sticky=tk.W, padx=(8, 0), pady=(6, 0))
+        clear_key_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(settings_frame, text=self.t["clear_api_key"], variable=clear_key_var).grid(row=3, column=1, columnspan=3, sticky=tk.W, padx=(8, 0), pady=(4, 0))
+        settings_frame.columnconfigure(3, weight=1)
+
         banned_frame = ttk.Frame(win, padding=(10, 0, 10, 8))
         banned_frame.pack(fill=tk.X)
         ttk.Label(banned_frame, text=self.t["banned_words"]).pack(side=tk.LEFT)
@@ -321,9 +388,9 @@ class MonitorApp:
 
         buttons = ttk.Frame(win, padding=(10, 0, 10, 10))
         buttons.pack(fill=tk.X)
-        ttk.Button(buttons, text=self.t["save"], command=lambda: self._save_prompt_config(win, text_widget, banned_entry)).pack(side=tk.RIGHT)
+        ttk.Button(buttons, text=self.t["save"], command=lambda: self._save_prompt_config(win, text_widget, banned_entry, provider_combo, api_url_entry, api_model_entry, api_key_entry, clear_key_var)).pack(side=tk.RIGHT)
         ttk.Button(buttons, text=self.t["cancel"], command=win.destroy).pack(side=tk.RIGHT, padx=(0, 8))
-        ttk.Button(buttons, text=self.t["reset_default"], command=lambda: self._reset_prompt_config(text_widget, banned_entry)).pack(side=tk.LEFT)
+        ttk.Button(buttons, text=self.t["reset_default"], command=lambda: self._reset_prompt_config(text_widget, banned_entry, provider_combo, api_url_entry, api_model_entry, api_key_entry, clear_key_var)).pack(side=tk.LEFT)
 
     def _toggle_autoreply(self):
         """Toggle auto-reply."""

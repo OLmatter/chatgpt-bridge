@@ -57,13 +57,16 @@ SKIP
 {convo}
 === Decision ==="""
 DEFAULT_BANNED_WORDS = ["稳", "保守", "求稳", "稳妥"]
-SUPERVISOR_CONFIG = {"prompt": DEFAULT_SUPERVISOR_PROMPT, "banned_words": list(DEFAULT_BANNED_WORDS)}
+DEFAULT_PROVIDER = "claude_cli"
+DEFAULT_API_URL = ""
+DEFAULT_API_MODEL = "gpt-4o-mini"
+SUPERVISOR_CONFIG = {"prompt": DEFAULT_SUPERVISOR_PROMPT, "banned_words": list(DEFAULT_BANNED_WORDS), "provider": DEFAULT_PROVIDER, "api_url": DEFAULT_API_URL, "api_model": DEFAULT_API_MODEL, "api_key": ""}
 
 
 def load_supervisor_config():
     """Load supervisor config from local JSON, falling back to defaults."""
     global SUPERVISOR_CONFIG
-    cfg = {"prompt": DEFAULT_SUPERVISOR_PROMPT, "banned_words": list(DEFAULT_BANNED_WORDS)}
+    cfg = {"prompt": DEFAULT_SUPERVISOR_PROMPT, "banned_words": list(DEFAULT_BANNED_WORDS), "provider": DEFAULT_PROVIDER, "api_url": DEFAULT_API_URL, "api_model": DEFAULT_API_MODEL, "api_key": ""}
     try:
         if os.path.exists(CONFIG_PATH):
             with open(CONFIG_PATH, "r", encoding="utf-8") as f:
@@ -72,13 +75,21 @@ def load_supervisor_config():
                 cfg["prompt"] = data["prompt"]
             if isinstance(data.get("banned_words"), list):
                 cfg["banned_words"] = [str(x) for x in data["banned_words"]]
+            if data.get("provider") in ("claude_cli", "openai_compatible"):
+                cfg["provider"] = data["provider"]
+            if isinstance(data.get("api_url"), str):
+                cfg["api_url"] = data["api_url"].strip()
+            if isinstance(data.get("api_model"), str) and data["api_model"].strip():
+                cfg["api_model"] = data["api_model"].strip()
+            if isinstance(data.get("api_key"), str):
+                cfg["api_key"] = data["api_key"]
     except Exception as e:
         log(f"Config load failed, using defaults: {e}")
     SUPERVISOR_CONFIG = cfg
     return cfg
 
 
-def save_supervisor_config(prompt=None, banned_words=None):
+def save_supervisor_config(prompt=None, banned_words=None, provider=None, api_url=None, api_model=None, api_key=None, clear_api_key=False):
     """Persist supervisor config and update in-memory settings."""
     global SUPERVISOR_CONFIG
     cfg = dict(SUPERVISOR_CONFIG)
@@ -86,6 +97,16 @@ def save_supervisor_config(prompt=None, banned_words=None):
         cfg["prompt"] = str(prompt)
     if banned_words is not None:
         cfg["banned_words"] = [str(x) for x in banned_words]
+    if provider in ("claude_cli", "openai_compatible"):
+        cfg["provider"] = provider
+    if api_url is not None:
+        cfg["api_url"] = str(api_url).strip()
+    if api_model is not None and str(api_model).strip():
+        cfg["api_model"] = str(api_model).strip()
+    if clear_api_key:
+        cfg["api_key"] = ""
+    elif api_key is not None and str(api_key).strip():
+        cfg["api_key"] = str(api_key).strip()
     with open(CONFIG_PATH, "w", encoding="utf-8") as f:
         json.dump(cfg, f, ensure_ascii=False, indent=2)
     SUPERVISOR_CONFIG = cfg
@@ -141,6 +162,39 @@ def ask_claude(prompt):
         return None
 
 
+
+def ask_openai_compatible(prompt, cfg):
+    """Call an OpenAI-compatible chat completions endpoint."""
+    api_url = (cfg.get("api_url") or "").strip()
+    api_key = (cfg.get("api_key") or "").strip()
+    model = (cfg.get("api_model") or DEFAULT_API_MODEL).strip()
+    if not api_url or not api_key or not model:
+        return None
+    if not api_url.rstrip("/").endswith("/chat/completions"):
+        api_url = api_url.rstrip("/") + "/chat/completions"
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.2,
+        "max_tokens": 80,
+    }
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        api_url,
+        data=data,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            body = json.loads(r.read().decode("utf-8"))
+        return (body.get("choices") or [{}])[0].get("message", {}).get("content", "").strip()
+    except Exception as e:
+        log(f"API provider failed: {e}")
+        return None
 def claude_decide(recent_turns, last_reply):
     convo = ""
     for t in recent_turns[-6:]:
@@ -151,9 +205,9 @@ def claude_decide(recent_turns, last_reply):
     prompt = template.replace("{convo}", convo)
     if "{convo}" not in template:
         prompt = f"{template}\n\n=== Conversation ===\n{convo}\n=== Decision ==="
-    result = ask_claude(prompt)
+    result = ask_openai_compatible(prompt, cfg) if cfg.get("provider") == "openai_compatible" else ask_claude(prompt)
     if result is None:
-        return {"action": "skip", "reason": "Claude timed out; will retry later"}
+        return {"action": "skip", "reason": "supervisor provider timed out or failed; will retry later"}
     if result.upper().startswith("SKIP"):
         return {"action": "skip", "reason": result}
     lines = result.split("\n")
@@ -209,10 +263,10 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, {"ok": True, "on": False})
         elif self.path == "/supervisor_config":
             cfg = load_supervisor_config()
-            self._send(200, {"ok": True, "prompt": cfg.get("prompt", ""), "banned_words": cfg.get("banned_words", [])})
+            self._send(200, {"ok": True, "prompt": cfg.get("prompt", ""), "banned_words": cfg.get("banned_words", []), "provider": cfg.get("provider", DEFAULT_PROVIDER), "api_url": cfg.get("api_url", ""), "api_model": cfg.get("api_model", DEFAULT_API_MODEL), "api_key_set": bool(cfg.get("api_key"))})
         elif self.path == "/supervisor_config/reset":
             cfg = save_supervisor_config(DEFAULT_SUPERVISOR_PROMPT, DEFAULT_BANNED_WORDS)
-            self._send(200, {"ok": True, "prompt": cfg.get("prompt", ""), "banned_words": cfg.get("banned_words", [])})
+            self._send(200, {"ok": True, "prompt": cfg.get("prompt", ""), "banned_words": cfg.get("banned_words", []), "provider": cfg.get("provider", DEFAULT_PROVIDER), "api_url": cfg.get("api_url", ""), "api_model": cfg.get("api_model", DEFAULT_API_MODEL), "api_key_set": bool(cfg.get("api_key"))})
         elif self.path == "/pages":
             with LOCK:
                 ps = [{"page_id": pid, "title": (p.get("snapshot") or {}).get("title","")[:40],
@@ -272,12 +326,19 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == "/supervisor_config":
             prompt = body.get("prompt")
             banned_words = body.get("banned_words")
+            provider = body.get("provider")
+            api_url = body.get("api_url")
+            api_model = body.get("api_model")
+            api_key = body.get("api_key")
+            clear_api_key = bool(body.get("clear_api_key"))
             if not isinstance(prompt, str) or not prompt.strip():
                 return self._send(400, {"ok": False, "error": "prompt is required"})
             if banned_words is not None and not isinstance(banned_words, list):
                 return self._send(400, {"ok": False, "error": "banned_words must be a list"})
-            cfg = save_supervisor_config(prompt, banned_words)
-            self._send(200, {"ok": True, "prompt": cfg.get("prompt", ""), "banned_words": cfg.get("banned_words", [])})
+            if provider is not None and provider not in ("claude_cli", "openai_compatible"):
+                return self._send(400, {"ok": False, "error": "provider must be claude_cli or openai_compatible"})
+            cfg = save_supervisor_config(prompt, banned_words, provider, api_url, api_model, api_key, clear_api_key)
+            self._send(200, {"ok": True, "prompt": cfg.get("prompt", ""), "banned_words": cfg.get("banned_words", []), "provider": cfg.get("provider", DEFAULT_PROVIDER), "api_url": cfg.get("api_url", ""), "api_model": cfg.get("api_model", DEFAULT_API_MODEL), "api_key_set": bool(cfg.get("api_key"))})
 
         elif self.path == "/send":
             text = body.get("text","").strip()
