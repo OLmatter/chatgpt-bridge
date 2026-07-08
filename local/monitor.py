@@ -139,15 +139,24 @@ class MonitorApp:
             return
         win = tk.Toplevel(self.root)
         win.title("Supervisor Prompt")
-        win.geometry("760x560")
-        win.minsize(560, 420)
+        win.geometry("820x640")
+        win.minsize(620, 500)
         win.transient(self.root)
         win.grab_set()
 
         header = ttk.Frame(win, padding=(10, 10, 10, 4))
         header.pack(fill=tk.X)
         ttk.Label(header, text="Supervisor prompt", font=("Segoe UI", 10, "bold")).pack(side=tk.LEFT)
-        ttk.Label(header, text="Use {convo} where recent turns should be inserted.", foreground="#666").pack(side=tk.RIGHT)
+        ttk.Label(header, text="Advanced setting", foreground="#666").pack(side=tk.RIGHT)
+
+        help_frame = ttk.LabelFrame(win, text="Editing guide", padding=(10, 6, 10, 8))
+        help_frame.pack(fill=tk.X, padx=10, pady=(0, 8))
+        help_text = (
+            "You can change wording, language, examples, and strictness.\n"
+            "Keep the output format: REPLY on the first line for a message, or SKIP on the first line to avoid replying.\n"
+            "Recommended: keep {convo}; it marks where recent turns are inserted. If removed, the backend appends the conversation automatically."
+        )
+        ttk.Label(help_frame, text=help_text, justify=tk.LEFT, wraplength=720).pack(anchor=tk.W)
 
         body = ttk.Frame(win, padding=(10, 0, 10, 8))
         body.pack(fill=tk.BOTH, expand=True)
