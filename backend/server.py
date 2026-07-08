@@ -180,7 +180,7 @@ def control_supervisor(action: str):
         if _supervisor_thread and _supervisor_thread.is_alive():
             return {"ok": True, "msg": "监督器已在运行"}
         _supervisor_stop_event = threading.Event()
-        sup = Supervisor(stop_event=_supervisor_stop_event)
+        sup = Supervisor(config={}, stop_event=_supervisor_stop_event)
         _supervisor_thread = threading.Thread(target=sup.run, daemon=True)
         _supervisor_thread.start()
         return {"ok": True, "msg": "监督器已启动"}

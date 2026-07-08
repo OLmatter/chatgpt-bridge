@@ -26,7 +26,8 @@ POLL_INTERVAL = 8  # 监督器扫描间隔
 PAGES: dict[str, dict] = {}
 RESULTS: dict[str, dict] = {}
 LOCK = threading.Lock()
-LAST_HANDLED = {}  # 监督器: page_id -> snippet 防重复
+LAST_HANDLED = {}  # 监督器: page_id -> {"snippet": str, "until": float} 防重复
+IN_FLIGHT: set[str] = set()  # 正在调 Claude 的 page_id,防止重复派发
 SUPERVISOR_ENABLED = {"on": True}  # 监督器总开关,GUI 可控制
 CLAUDE_LOCK = threading.Lock()    # Claude 串行锁(避免并发起多个 node 进程爆内存+卡死)
 
@@ -259,6 +260,17 @@ def _wait(rid, timeout):
 # ====== 监督器(由 HTTP poll 间接触发,不用独立线程)======
 _last_supervisor_run = [0]
 
+def _mark_handled(pid: str, snip: str, cooldown: int) -> None:
+    """记录该页面已处理,并清除 in-flight 状态。"""
+    with LOCK:
+        LAST_HANDLED[pid] = {"snippet": snip, "until": _now() + cooldown}
+        IN_FLIGHT.discard(pid)
+
+
+def _clear_in_flight(pid: str) -> None:
+    with LOCK:
+        IN_FLIGHT.discard(pid)
+
 def supervisor_once():
     """监督器单次扫描。由油猴 poll 时触发(每 POLL_INTERVAL 秒最多跑一次)。"""
     now = _now()
@@ -287,20 +299,17 @@ def supervisor_once():
                 continue
             last = snap.get("lastAssistant", "")
             snip = last[-80:] if last else "empty"
-            handled = LAST_HANDLED.get(pid)
-            should_skip = False
-            if handled and "|" in handled:
-                parts = handled.split("|", 1)
-                try:
-                    ts = float(parts[0])
-                    # 不管回复变没变,90秒内不重复催同一窗口
-                    if now - ts < 90:
-                        should_skip = True
-                except ValueError:
-                    pass
-            if should_skip:
-                continue
             turns = snap.get("recentTurns", [])
+            with LOCK:
+                if pid in IN_FLIGHT:
+                    continue
+                handled = LAST_HANDLED.get(pid)
+                if handled and now < handled.get("until", 0):
+                    continue
+                IN_FLIGHT.add(pid)
+            if not turns and not last:
+                _clear_in_flight(pid)
+                continue
             idle_pages.append((pid, turns, last or "(无回复)", snip))
 
         if idle_pages:
@@ -322,7 +331,7 @@ def handle_page(pid, turns, last_reply, snip):
         log(f"  {pid} 跳过: {reason}")
         # 跳过也临时标记 30 秒(Claude超时)或 90 秒(到长度上限),避免疯狂重试
         cooldown = 30 if '超时' in reason else 90
-        LAST_HANDLED[pid] = f"{_now()}|{snip}"
+        _mark_handled(pid, snip, cooldown)
         return
     msg = d["message"]
     log(f"  {pid} Claude建议: {msg[:70]}")
@@ -331,9 +340,11 @@ def handle_page(pid, turns, last_reply, snip):
         with LOCK:
             if pid in PAGES:
                 PAGES[pid]["queue"].put({"id":cid,"cmd":"send","text":msg})
-                LAST_HANDLED[pid] = f"{_now()}|{snip}"  # 成功后标记,90秒后可重发
+                LAST_HANDLED[pid] = {"snippet": snip, "until": _now() + 90}  # 成功后标记,90秒后可重发
+            IN_FLIGHT.discard(pid)
         log(f"  {pid} ✓ 已入队发送")
     except Exception as e:
+        _clear_in_flight(pid)
         log(f"  {pid} ✗ {e}")
 
 

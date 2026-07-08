@@ -1,133 +1,119 @@
-# ChatGPT WebUI Bridge
+# ChatGPT WebUI Bridge / ChatGPT 网页桥接器
 
-让 agent 程序通过 API 控制多个已登录的 ChatGPT 网页窗口:发消息、读回复、监控页面状态、自动监督。
+[中文](#中文) | [English](#english)
 
-## 工作原理
+---
 
-```
-你的 Agent 程序  ←HTTP API→  本地后端服务  ←HTTP轮询→  油猴脚本(注入ChatGPT页面)
+## 中文
+
+让本地 agent 程序通过 HTTP API 控制多个已登录的 ChatGPT 网页窗口：发消息、读回复、监控页面状态，并可选自动监督空闲窗口。
+
+### 工作原理
+
+```text
+你的 Agent 程序  ←HTTP API→  本地后端服务  ←HTTP 轮询→  油猴脚本(注入 ChatGPT 页面)
                                                   ↕
                                               ChatGPT 网页
 ```
 
-- **油猴脚本**注入到你已登录的 ChatGPT 页面,定时回传页面快照(对话内容、生成状态),并接收执行命令
-- **后端服务**(FastAPI)管理所有窗口状态,提供 HTTP API 给 agent 调用
-- **监督器**(可选)自动监控空闲窗口,调用 Claude CLI 发鼓励消息让 ChatGPT 继续
+- **油猴脚本** 注入已登录的 ChatGPT 页面，定时回传页面快照，并接收执行命令。
+- **后端服务** 管理所有窗口状态，提供 HTTP API 给 agent 调用。
+- **监督器** 可选启用，自动扫描空闲窗口，调用 Claude CLI 生成短回复，让 ChatGPT 继续。
 
-## 快速开始
+### 快速开始
 
-### 1. 安装后端
+#### 1. 安装后端
 
 ```bash
 cd chatgpt-bridge
 pip install -r requirements.txt
 ```
 
-### 2. 启动服务
+#### 2. 启动服务
 
 ```bash
 python run.py
-# 带 Claude 监督器启动:
+# 同时启动 Claude 监督器
 python run.py --with-supervisor
 ```
 
 启动后访问 `http://127.0.0.1:5000/docs` 查看完整 API 文档。
 
-### 3. 安装油猴脚本
+#### 3. 安装油猴脚本
 
-1. Chrome 装 [Tampermonkey](https://www.tampermonkey.net/) 扩展
+1. Chrome 安装 Tampermonkey 扩展。
+2. 打开 `chrome://extensions/`，开启右上角 **开发者模式**。
+3. 在 Tampermonkey 中新建脚本，粘贴 `userscript/chatgpt_bridge.user.js` 全部内容并保存。
+4. 在脚本设置里允许 `GM_xmlhttpRequest` 和跨域请求。
+5. 打开或刷新 `https://chatgpt.com/`。
+6. 页面右上角出现绿色 `Bridge: 就绪` 标签即表示连接成功。
 
-   > ⚠️ **必须开启 Chrome 扩展的「开发者模式」**:地址栏输入 `chrome://extensions/` → 右上角打开 **开发者模式** 开关。Tampermonkey 在开发者模式关闭时会被 Chrome 限制,脚本无法注入或权限被拦。
+如果标签显示 `等待服务...`，先启动后端；如果显示 `连接错误`，检查 Tampermonkey 权限和后端端口。
 
-2. 打开 Tampermonkey 管理面板(`chrome-extension://dhdgffkkebhmkfjojejmpbldmpobfkfo/options.html`),点 **"+"** 新建脚本
-
-3. 把默认内容全删,粘贴 `userscript/chatgpt_bridge.user.js` 的全部内容,Ctrl+S 保存
-
-4. **给脚本开全部权限**(关键!不开权限会连不上):
-   - 回到 Tampermonkey 管理面板(已安装脚本列表)
-   - 找到 "ChatGPT WebUI Bridge",点右边的 **编辑** 铅笔图标
-   - 进入 **设置** 标签页
-   - 把以下权限全部改为 **允许/Always**:
-     - `GM_xmlhttpRequest` → 允许(核心!不发权限就连不上后端)
-     - 跨域请求 → 允许
-   - 底部 **保存**
-
-   > 如果 Tampermonkey 弹出权限确认框(首次发请求时),必须点 **允许**,否则 `GM_xmlhttpRequest` 无法访问 `http://127.0.0.1:5000`。
-
-5. 打开/刷新 ChatGPT 页面(`https://chatgpt.com/`)
-
-6. 页面右上角出现绿色 **"Bridge: 就绪"** 标签 = 成功
-
-> 可开多个 ChatGPT 标签页,每个都会自动连接。
-
-> 如果标签显示 **"等待服务..."**(红色):后端没启动,先跑 `python run.py`。
-> 如果显示 **"连接错误"**:检查 Tampermonkey 权限是否开了 + 后端是否在跑。
-
-### 4. 你的 agent 接入
+### Agent 接入示例
 
 ```python
 from examples.agent_client import ChatGPTBridge
 
 bridge = ChatGPTBridge("http://127.0.0.1:5000")
 
-# 看有哪些窗口
 for p in bridge.list_pages():
     print(p["page_id"], p["title"], "生成中" if p["is_generating"] else "空闲")
 
-# 找空闲窗口,发消息
 reply = bridge.send("帮我总结这段对话")
 print(reply)
 
-# 看页面快照(完整对话)
 snap = bridge.snapshot()
 for t in snap["recentTurns"]:
     print(f"[{t['role']}] {t['text']}")
 ```
 
-## API 文档
-
-启动后访问 `/docs` 有交互式文档。主要接口:
+### 主要 API
 
 | 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/status` | 服务状态(连接了多少窗口) |
-| GET | `/pages` | 列出所有窗口(标题、状态、消息数) |
-| GET | `/snapshot?page_id=` | 某窗口的快照(最近对话、生成状态) |
-| GET | `/all_snapshots` | 所有窗口快照 |
-| POST | `/send` | 发消息并等回复 `{"text":"...","page_id":"..."}` |
-| POST | `/send_async` | 异步发(不等回复) |
+|---|---|---|
+| GET | `/status` | 服务状态 |
+| GET | `/pages` | 列出所有窗口 |
+| GET | `/snapshot?page_id=` | 获取某窗口快照 |
+| GET | `/all_snapshots` | 获取所有窗口快照 |
+| POST | `/send` | 发消息并等待回复 |
+| POST | `/send_async` | 异步发消息 |
 | POST | `/new_chat` | 开新对话 |
 | GET | `/idle` | 找一个空闲窗口 |
 | POST | `/supervisor/start` | 启动 Claude 监督器 |
-| POST | `/supervisor/stop` | 停止监督器 |
+| POST | `/supervisor/stop` | 停止 Claude 监督器 |
 
-## 配置
+### 当前维护入口
 
-编辑 `config.yaml`:
+推荐优先使用 FastAPI 版：
 
-- **server.port** — 后端端口(油猴脚本里的 `BACKEND_URL` 要同步改)
-- **supervisor.enabled** — 是否启动时自动开监督器
-- **supervisor.prompt** — Claude 的提示词(改成你的场景:学习/工作/比赛)
-- **supervisor.banned_words** — 禁用词(Claude 回复里包含会被自动删除)
-
-`examples/neurogolf_config.yaml` 是 Kaggle NeuroGolf 比赛的专用配置示例。
-
-## 监督器(可选)
-
-监督器自动扫描空闲的 ChatGPT 窗口,调 Claude CLI 决定该说什么鼓励话,然后发过去让 ChatGPT 继续。适合让多个窗口持续干活。
-
-需要先装 Claude CLI:
 ```bash
-npm install -g @anthropic-ai/claude-code
+python run.py
 ```
 
-然后在 `config.yaml` 里设 `supervisor.enabled: true`,或启动时加 `--with-supervisor`。
+如果不想安装 FastAPI 依赖，可以用单体版：
 
-## 项目结构
-
+```bash
+cd local
+python run_all.py
 ```
+
+单体版 `local/run_all.py` 已加入每页 `IN_FLIGHT` 锁，避免 Claude 决策未返回时对同一空闲页面重复自动回复。
+
+### 配置
+
+编辑 `config.yaml`：
+
+- `server.port`：后端端口，需和油猴脚本里的 `BACKEND_URL` 一致。
+- `supervisor.enabled`：是否启动时自动开启监督器。
+- `supervisor.prompt`：Claude 监督器提示词。
+- `supervisor.banned_words`：自动删除的禁用词。
+
+### 项目结构
+
+```text
 chatgpt-bridge/
-├── run.py                       # 一键启动 (FastAPI 版)
+├── run.py                       # FastAPI 启动入口
 ├── config.yaml                  # 配置
 ├── requirements.txt
 ├── backend/
@@ -138,25 +124,152 @@ chatgpt-bridge/
 │   └── chatgpt_bridge.user.js   # 油猴脚本
 ├── examples/
 │   ├── agent_client.py          # Python 客户端封装
-│   └── neurogolf_config.yaml    # NeuroGolf 比赛配置示例
-└── local/                       # 单体版(不想装 FastAPI 时用)
-    ├── run_all.py               # 桥接+监督器一体(标准库,零依赖)
-    ├── monitor.py               # tkinter 监控 GUI(窗口状态+自动回复开关)
-    └── restart.bat              # 一键重启(杀掉旧进程避免端口冲突)
+│   └── neurogolf_config.yaml    # NeuroGolf 示例配置
+└── local/                       # 单体版
+    ├── run_all.py               # 桥接 + 监督器一体
+    ├── monitor.py               # tkinter 监控 GUI
+    └── restart.bat              # Windows 一键重启
 ```
 
-### FastAPI 版 vs 单体版
+### 注意事项
 
-| | FastAPI 版(`run.py`) | 单体版(`local/run_all.py`) |
+- 油猴脚本依赖 `GM_xmlhttpRequest`，建议使用 Tampermonkey。
+- 后台标签页可能被浏览器节流，切回页面会自动恢复连接。
+- `page_id` 基于对话 URL，同一对话多个标签页也能区分。
+- 自动监督只适合短促继续型回复；复杂策略应由外部 agent 控制。
+
+---
+
+## English
+
+ChatGPT WebUI Bridge lets a local agent control multiple logged-in ChatGPT browser tabs through an HTTP API: send prompts, read replies, monitor page state, and optionally auto-nudge idle tabs.
+
+### How It Works
+
+```text
+Your agent  ←HTTP API→  Local backend service  ←HTTP polling→  Userscript injected into ChatGPT
+                                                              ↕
+                                                          ChatGPT Web UI
+```
+
+- The **userscript** runs inside logged-in ChatGPT pages, sends snapshots to the backend, and receives commands.
+- The **backend service** manages page state and exposes HTTP APIs to agents.
+- The optional **supervisor** scans idle tabs and calls Claude CLI to produce short continuation messages.
+
+### Quick Start
+
+#### 1. Install backend dependencies
+
+```bash
+cd chatgpt-bridge
+pip install -r requirements.txt
+```
+
+#### 2. Start the service
+
+```bash
+python run.py
+# Start with the Claude supervisor
+python run.py --with-supervisor
+```
+
+Open `http://127.0.0.1:5000/docs` for the generated API docs.
+
+#### 3. Install the userscript
+
+1. Install the Tampermonkey extension in Chrome.
+2. Open `chrome://extensions/` and enable **Developer mode**.
+3. Create a new Tampermonkey script and paste the full contents of `userscript/chatgpt_bridge.user.js`.
+4. Allow `GM_xmlhttpRequest` and cross-origin requests in the script settings.
+5. Open or refresh `https://chatgpt.com/`.
+6. A green `Bridge: ready` badge means the page is connected.
+
+If the badge says `waiting for service`, start the backend first. If it says `connection error`, check Tampermonkey permissions and the backend port.
+
+### Agent Example
+
+```python
+from examples.agent_client import ChatGPTBridge
+
+bridge = ChatGPTBridge("http://127.0.0.1:5000")
+
+for p in bridge.list_pages():
+    print(p["page_id"], p["title"], "generating" if p["is_generating"] else "idle")
+
+reply = bridge.send("Summarize this conversation")
+print(reply)
+
+snap = bridge.snapshot()
+for t in snap["recentTurns"]:
+    print(f"[{t['role']}] {t['text']}")
+```
+
+### Main APIs
+
+| Method | Path | Description |
 |---|---|---|
-| 依赖 | fastapi, uvicorn, pyyaml | 零依赖(Python 标准库) |
-| API 文档 | `/docs` 交互式 | 无 |
-| 监控 GUI | 无 | `local/monitor.py` |
-| 适用场景 | 给 agent 正式集成 | 自己快速用 |
+| GET | `/status` | Service status |
+| GET | `/pages` | List connected tabs |
+| GET | `/snapshot?page_id=` | Get one page snapshot |
+| GET | `/all_snapshots` | Get all snapshots |
+| POST | `/send` | Send a message and wait for reply |
+| POST | `/send_async` | Send a message asynchronously |
+| POST | `/new_chat` | Start a new chat |
+| GET | `/idle` | Find an idle page |
+| POST | `/supervisor/start` | Start the Claude supervisor |
+| POST | `/supervisor/stop` | Stop the Claude supervisor |
 
-## 注意事项
+### Maintained Entrypoints
 
-- 油猴脚本用 `GM_xmlhttpRequest` 绕过 CSP,需要 Tampermonkey(不是 Greasemonkey)
-- 后台标签页可能被浏览器节流,脚本有自动恢复机制(切回来会重连)
-- `page_id` 基于对话 URL,每个对话唯一;同一对话开多个标签页也能区分
-- 监督器的 Claude CLI 调用是同步的,但多个窗口并发处理
+Prefer the FastAPI version:
+
+```bash
+python run.py
+```
+
+Use the single-process local version when you do not want FastAPI dependencies:
+
+```bash
+cd local
+python run_all.py
+```
+
+The local `run_all.py` now tracks per-page `IN_FLIGHT` state so the supervisor does not enqueue repeated auto-replies for the same idle tab while Claude is still deciding.
+
+### Configuration
+
+Edit `config.yaml`:
+
+- `server.port`: backend port; keep it aligned with `BACKEND_URL` in the userscript.
+- `supervisor.enabled`: whether the supervisor starts automatically.
+- `supervisor.prompt`: prompt template for Claude supervisor decisions.
+- `supervisor.banned_words`: words removed from supervisor replies.
+
+### Project Layout
+
+```text
+chatgpt-bridge/
+├── run.py                       # FastAPI entrypoint
+├── config.yaml                  # Configuration
+├── requirements.txt
+├── backend/
+│   ├── server.py                # FastAPI backend
+│   ├── bridge_state.py          # Page state manager
+│   └── supervisor.py            # Claude supervisor
+├── userscript/
+│   └── chatgpt_bridge.user.js   # Tampermonkey userscript
+├── examples/
+│   ├── agent_client.py          # Python client wrapper
+│   └── neurogolf_config.yaml    # NeuroGolf sample config
+└── local/                       # Single-process version
+    ├── run_all.py               # Bridge + supervisor in one process
+    ├── monitor.py               # tkinter monitor GUI
+    └── restart.bat              # Windows restart helper
+```
+
+### Notes
+
+- The userscript relies on `GM_xmlhttpRequest`; Tampermonkey is recommended.
+- Background tabs may be throttled by the browser; switching back to a tab lets it reconnect.
+- `page_id` is based on the conversation URL, so duplicate tabs of the same conversation can still be distinguished.
+- Auto-supervision is intended for short continuation nudges; complex strategies should live in the external agent.
