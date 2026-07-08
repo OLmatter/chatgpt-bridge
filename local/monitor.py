@@ -18,7 +18,7 @@ except Exception:
     pass
 
 import tkinter as tk
-from tkinter import ttk
+from tkinter import messagebox, ttk
 
 BASE = "http://127.0.0.1:5000"
 REFRESH_INTERVAL = 2000  # 毫秒
@@ -31,6 +31,18 @@ def fetch(path):
     except Exception:
         return None
 
+
+def post_json(path, payload):
+    try:
+        req = urllib.request.Request(
+            f"{BASE}{path}",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=5) as r:
+            return json.loads(r.read().decode("utf-8"))
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
 class MonitorApp:
     def __init__(self, root):
@@ -83,6 +95,8 @@ class MonitorApp:
         self.var_autoreply = tk.BooleanVar(value=True)
         self.btn_autoreply = ttk.Checkbutton(bottom, text="Auto-reply", variable=self.var_autoreply, command=self._toggle_autoreply)
         self.btn_autoreply.pack(side=tk.LEFT, padx=(15, 0))
+        self.btn_prompt = ttk.Button(bottom, text="Prompt...", command=self._edit_prompt)
+        self.btn_prompt.pack(side=tk.LEFT, padx=(8, 0))
 
         ttk.Label(bottom, text="Refresh every 2s", font=("Consolas", 8), foreground="#999").pack(side=tk.RIGHT)
 
@@ -91,6 +105,71 @@ class MonitorApp:
         self._state_since = {}  # pid -> (state, timestamp)
 
         self._refresh()
+
+    def _load_prompt_config(self):
+        cfg = fetch("/supervisor_config")
+        if not cfg or not cfg.get("ok"):
+            messagebox.showerror("Prompt", "Backend is not connected or config is unavailable.")
+            return None
+        return cfg
+
+    def _save_prompt_config(self, win, text_widget, banned_entry):
+        prompt = text_widget.get("1.0", tk.END).strip()
+        banned_words = [x.strip() for x in banned_entry.get().split(",") if x.strip()]
+        result = post_json("/supervisor_config", {"prompt": prompt, "banned_words": banned_words})
+        if result and result.get("ok"):
+            messagebox.showinfo("Prompt", "Prompt saved. The next auto-reply will use it.")
+            win.destroy()
+        else:
+            messagebox.showerror("Prompt", f"Save failed: {(result or {}).get('error', 'unknown error')}")
+
+    def _reset_prompt_config(self, text_widget, banned_entry):
+        cfg = fetch("/supervisor_config/reset")
+        if not cfg or not cfg.get("ok"):
+            messagebox.showerror("Prompt", "Reset failed.")
+            return
+        text_widget.delete("1.0", tk.END)
+        text_widget.insert("1.0", cfg.get("prompt", ""))
+        banned_entry.delete(0, tk.END)
+        banned_entry.insert(0, ", ".join(cfg.get("banned_words", [])))
+
+    def _edit_prompt(self):
+        cfg = self._load_prompt_config()
+        if cfg is None:
+            return
+        win = tk.Toplevel(self.root)
+        win.title("Supervisor Prompt")
+        win.geometry("760x560")
+        win.minsize(560, 420)
+        win.transient(self.root)
+        win.grab_set()
+
+        header = ttk.Frame(win, padding=(10, 10, 10, 4))
+        header.pack(fill=tk.X)
+        ttk.Label(header, text="Supervisor prompt", font=("Segoe UI", 10, "bold")).pack(side=tk.LEFT)
+        ttk.Label(header, text="Use {convo} where recent turns should be inserted.", foreground="#666").pack(side=tk.RIGHT)
+
+        body = ttk.Frame(win, padding=(10, 0, 10, 8))
+        body.pack(fill=tk.BOTH, expand=True)
+        text_widget = tk.Text(body, wrap=tk.WORD, undo=True, height=20)
+        scroll = ttk.Scrollbar(body, orient=tk.VERTICAL, command=text_widget.yview)
+        text_widget.configure(yscrollcommand=scroll.set)
+        text_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        text_widget.insert("1.0", cfg.get("prompt", ""))
+
+        banned_frame = ttk.Frame(win, padding=(10, 0, 10, 8))
+        banned_frame.pack(fill=tk.X)
+        ttk.Label(banned_frame, text="Banned words (comma-separated):").pack(side=tk.LEFT)
+        banned_entry = ttk.Entry(banned_frame)
+        banned_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(8, 0))
+        banned_entry.insert(0, ", ".join(cfg.get("banned_words", [])))
+
+        buttons = ttk.Frame(win, padding=(10, 0, 10, 10))
+        buttons.pack(fill=tk.X)
+        ttk.Button(buttons, text="Save", command=lambda: self._save_prompt_config(win, text_widget, banned_entry)).pack(side=tk.RIGHT)
+        ttk.Button(buttons, text="Cancel", command=win.destroy).pack(side=tk.RIGHT, padx=(0, 8))
+        ttk.Button(buttons, text="Reset default", command=lambda: self._reset_prompt_config(text_widget, banned_entry)).pack(side=tk.LEFT)
 
     def _toggle_autoreply(self):
         """Toggle auto-reply."""

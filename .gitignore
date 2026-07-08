@@ -8,3 +8,4 @@ env/
 *.log
 .DS_Store
 Thumbs.db
+local/supervisor_config.json

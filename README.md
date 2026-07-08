@@ -107,6 +107,7 @@ Edit `config.yaml`:
 - `supervisor.enabled`: whether the supervisor starts automatically.
 - `supervisor.prompt`: prompt template for Claude supervisor decisions.
 - `supervisor.banned_words`: words removed from supervisor replies.
+- Local GUI prompt editor: run `cd local && python launcher.py`, click `Prompt...`, edit the prompt text box, and save. The local override is stored in `local/supervisor_config.json`; use `{convo}` where recent turns should be inserted. Changes apply to the next auto-reply.
 
 ### Project Layout
 
@@ -243,6 +244,7 @@ python run_all.py
 - `supervisor.enabled`：是否启动时自动开启监督器。
 - `supervisor.prompt`：Claude 监督器提示词。
 - `supervisor.banned_words`：自动删除的禁用词。
+- 本地 GUI 提示词编辑器：运行 `cd local && python launcher.py`，点击 `Prompt...`，在文本框里编辑并保存。覆盖配置会保存到 `local/supervisor_config.json`；用 `{convo}` 表示插入最近对话的位置。修改会从下一次自动回复开始生效。
 
 ### 项目结构
 
@@ -274,4 +276,3 @@ chatgpt-bridge/
 - 自动监督只适合短促继续型回复；复杂策略应由外部 agent 控制。
 
 ---
-
