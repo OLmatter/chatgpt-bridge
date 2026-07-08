@@ -73,7 +73,8 @@ TEXT = {
         "offline": "Offline",
         "generating": "Generating",
         "idle": "Idle",
-        "summary": "Active {alive}  |  Generating {gen}  |  Idle {idle}  |  Offline {dead}",
+        "limited": "Limited",
+        "summary": "Active {alive}  |  Generating {gen}  |  Limited {limited}  |  Idle {idle}  |  Offline {dead}",
         "auto_on": "Auto-reply ✓ on",
         "auto_off": "Auto-reply ✗ off",
         "prompt_title": "Supervisor Prompt",
@@ -115,7 +116,8 @@ TEXT = {
         "offline": "掉线",
         "generating": "生成中",
         "idle": "空闲",
-        "summary": "活跃 {alive}  |  生成中 {gen}  |  空闲 {idle}  |  掉线 {dead}",
+        "limited": "已达上限",
+        "summary": "活跃 {alive}  |  生成中 {gen}  |  已达上限 {limited}  |  空闲 {idle}  |  掉线 {dead}",
         "auto_on": "自动回复 ✓ 开",
         "auto_off": "自动回复 ✗ 关",
         "prompt_title": "监督器提示词",
@@ -221,6 +223,7 @@ class MonitorApp:
         self.tree.tag_configure("gen", foreground="#2a8a2a")     # 绿
         self.tree.tag_configure("idle", foreground="#666666")    # 灰
         self.tree.tag_configure("idle_long", foreground="#cc8800", background="#fff8e0")  # 黄高亮
+        self.tree.tag_configure("limited", foreground="#b00020", background="#ffe8e8")  # 长度上限
         self.tree.tag_configure("dead", foreground="#cc3333")    # 红
 
         scrollbar = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=self.tree.yview)
@@ -427,8 +430,11 @@ class MonitorApp:
             pid = p.get("page_id") or "?"
             age = p.get("age", 999)
             gen = p.get("isGenerating", False)
+            limited = bool(p.get("conversationLimited"))
             if age >= 3:
                 state_name = "dead"
+            elif limited:
+                state_name = "limited"
             elif gen:
                 state_name = "gen"
             else:
@@ -441,14 +447,14 @@ class MonitorApp:
                 dur = 0
             page_infos.append((p, pid, state_name, dur))
 
-        # 排序: 生成中(时长越长越上) > 空闲(时长越短越上) > 掉线
-        # 组号: gen=0, idle=1, dead=2; gen组内按时长降序, idle组内按时长升序
+        # 排序: 生成中 > 已达上限 > 空闲 > 掉线
+        order = {"gen": 0, "limited": 1, "idle": 2, "dead": 3}
         page_infos.sort(key=lambda x: (
-            0 if x[2]=="gen" else (1 if x[2]=="idle" else 2),
+            order.get(x[2], 9),
             -x[3] if x[2]=="gen" else x[3]
         ))
 
-        alive_n = gen_n = idle_n = dead_n = 0
+        alive_n = gen_n = limited_n = idle_n = dead_n = 0
         for p, pid, state_name, dur in page_infos:
             title = (p.get("title") or "").strip()[:25] or self.t["untitled"]
             msgs = p.get("assistantCount", 0)
@@ -458,6 +464,8 @@ class MonitorApp:
                 icon = "🔴"; tag = "dead"; dead_n += 1
             elif state_name == "gen":
                 icon = "🟢"; tag = "gen"; gen_n += 1; alive_n += 1
+            elif state_name == "limited":
+                icon = "⛔"; tag = "limited"; limited_n += 1; alive_n += 1
             else:
                 icon = "✅"; tag = "idle"; idle_n += 1; alive_n += 1
 
@@ -466,7 +474,14 @@ class MonitorApp:
                 tag = "idle_long"
 
             # 格式化时长
-            label = self.t["offline"] if state_name=="dead" else (self.t["generating"] if state_name=="gen" else self.t["idle"])
+            if state_name == "dead":
+                label = self.t["offline"]
+            elif state_name == "gen":
+                label = self.t["generating"]
+            elif state_name == "limited":
+                label = self.t["limited"]
+            else:
+                label = self.t["idle"]
             if dur_seconds >= 3600:
                 dur_s = f"{label} {dur_seconds//3600}h{(dur_seconds%3600)//60}m"
             elif dur_seconds >= 60:
@@ -482,7 +497,7 @@ class MonitorApp:
         if self.var_autoreply.get() != sup_on:
             self.var_autoreply.set(sup_on)
         self.lbl_status.config(
-            text=self.t["summary"].format(alive=alive_n, gen=gen_n, idle=idle_n, dead=dead_n),
+            text=self.t["summary"].format(alive=alive_n, gen=gen_n, limited=limited_n, idle=idle_n, dead=dead_n),
             foreground="#333333",
         )
         self.lbl_sup.config(
