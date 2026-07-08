@@ -2,12 +2,14 @@
 <img width="1578" height="2043" alt="d88501719240ae4b157459e7e675764c" src="https://github.com/user-attachments/assets/a8cf3849-be27-40b2-b087-19f0d019bdea" />
 
 
-[English](#english) | [中文](#中文)
+[English](#english) | [中文](#中文) | [Agent install skill](AGENT_INSTALL_SKILL.md)
 
 ---
 ## English
 
 ChatGPT WebUI Bridge lets a local agent control multiple logged-in ChatGPT browser tabs through an HTTP API: send prompts, read replies, monitor page state, and optionally auto-nudge idle tabs.
+
+For agent-led installs and troubleshooting, read [`AGENT_INSTALL_SKILL.md`](AGENT_INSTALL_SKILL.md).
 
 ### How It Works
 
