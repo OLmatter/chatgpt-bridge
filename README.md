@@ -1,4 +1,6 @@
 # ChatGPT WebUI Bridge
+<img width="1578" height="2043" alt="d88501719240ae4b157459e7e675764c" src="https://github.com/user-attachments/assets/a8cf3849-be27-40b2-b087-19f0d019bdea" />
+
 
 [English](#english) | [中文](#中文)
 
