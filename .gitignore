@@ -13,3 +13,5 @@ local/launcher.lock
 local/monitor.lock
 local/monitor_config.json
 local/monitor_config.json
+.scratch/
+local/.codex_last_message.txt

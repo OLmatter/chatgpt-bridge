@@ -20,6 +20,7 @@ except Exception:
 
 HTTP_PORT = 5000
 CLAUDE_CMD = shutil.which("claude") or r"C:\Users\520hh\AppData\Roaming\npm\claude.cmd"
+CODEX_CMD = shutil.which("codex.cmd") or shutil.which("codex") or r"C:\Users\520hh\AppData\Roaming\npm\codex.cmd"
 POLL_INTERVAL = 8  # 监督器扫描间隔
 
 # ====== 桥接服务状态 ======
@@ -76,7 +77,7 @@ def load_supervisor_config():
                 cfg["prompt"] = data["prompt"]
             if isinstance(data.get("banned_words"), list):
                 cfg["banned_words"] = [str(x) for x in data["banned_words"]]
-            if data.get("provider") in ("claude_cli", "openai_compatible"):
+            if data.get("provider") in ("claude_cli", "codex_cli", "openai_compatible"):
                 cfg["provider"] = data["provider"]
             if isinstance(data.get("api_url"), str):
                 cfg["api_url"] = data["api_url"].strip()
@@ -100,7 +101,7 @@ def save_supervisor_config(prompt=None, banned_words=None, provider=None, api_ur
         cfg["prompt"] = str(prompt)
     if banned_words is not None:
         cfg["banned_words"] = [str(x) for x in banned_words]
-    if provider in ("claude_cli", "openai_compatible"):
+    if provider in ("claude_cli", "codex_cli", "openai_compatible"):
         cfg["provider"] = provider
     if api_url is not None:
         cfg["api_url"] = str(api_url).strip()
@@ -168,6 +169,51 @@ def ask_claude(prompt):
 
 
 
+def ask_codex(prompt):
+    """Call Codex CLI non-interactively and return the final text."""
+    with CLAUDE_LOCK:
+        for attempt in range(2):
+            proc = None
+            out_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".codex_last_message.txt")
+            try:
+                try:
+                    if os.path.exists(out_path):
+                        os.remove(out_path)
+                except Exception:
+                    pass
+                proc = subprocess.Popen(
+                    [
+                        CODEX_CMD, "exec", "--color", "never", "--sandbox", "read-only",
+                        "--skip-git-repo-check", "--ignore-rules", "--output-last-message", out_path, "-",
+                    ],
+                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    text=True, encoding="utf-8",
+                    cwd=os.path.dirname(os.path.abspath(__file__)),
+                )
+                stdout, _ = proc.communicate(input=prompt, timeout=60)
+                if os.path.exists(out_path):
+                    with open(out_path, "r", encoding="utf-8") as f:
+                        text = f.read().strip()
+                    if text:
+                        return text
+                return stdout.strip()
+            except subprocess.TimeoutExpired:
+                if proc:
+                    proc.kill()
+                    proc.wait(timeout=5)
+                if attempt == 0:
+                    time.sleep(2)
+                    continue
+                return None
+            except Exception as e:
+                log(f"Codex provider failed: {e}")
+                if proc:
+                    try: proc.kill()
+                    except Exception: pass
+                return None
+        return None
+
+
 def ask_openai_compatible(prompt, cfg):
     """Call an OpenAI-compatible chat completions endpoint."""
     api_url = (cfg.get("api_url") or "").strip()
@@ -210,7 +256,13 @@ def claude_decide(recent_turns, last_reply):
     prompt = template.replace("{convo}", convo)
     if "{convo}" not in template:
         prompt = f"{template}\n\n=== Conversation ===\n{convo}\n=== Decision ==="
-    result = ask_openai_compatible(prompt, cfg) if cfg.get("provider") == "openai_compatible" else ask_claude(prompt)
+    provider = cfg.get("provider")
+    if provider == "openai_compatible":
+        result = ask_openai_compatible(prompt, cfg)
+    elif provider == "codex_cli":
+        result = ask_codex(prompt)
+    else:
+        result = ask_claude(prompt)
     if result is None:
         return {"action": "reply", "message": cfg.get("fallback_reply", DEFAULT_FALLBACK_REPLY)}
     if result.upper().startswith("SKIP"):
@@ -340,8 +392,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(400, {"ok": False, "error": "prompt is required"})
             if banned_words is not None and not isinstance(banned_words, list):
                 return self._send(400, {"ok": False, "error": "banned_words must be a list"})
-            if provider is not None and provider not in ("claude_cli", "openai_compatible"):
-                return self._send(400, {"ok": False, "error": "provider must be claude_cli or openai_compatible"})
+            if provider is not None and provider not in ("claude_cli", "codex_cli", "openai_compatible"):
+                return self._send(400, {"ok": False, "error": "provider must be claude_cli, codex_cli, or openai_compatible"})
             cfg = save_supervisor_config(prompt, banned_words, provider, api_url, api_model, api_key, clear_api_key)
             self._send(200, {"ok": True, "prompt": cfg.get("prompt", ""), "banned_words": cfg.get("banned_words", []), "provider": cfg.get("provider", DEFAULT_PROVIDER), "api_url": cfg.get("api_url", ""), "api_model": cfg.get("api_model", DEFAULT_API_MODEL), "api_key_set": bool(cfg.get("api_key"))})
 

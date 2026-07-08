@@ -92,6 +92,7 @@ TEXT = {
         "reset_failed": "Reset failed.",
         "provider": "Provider:",
         "provider_cli": "Claude CLI",
+        "provider_codex": "Codex CLI",
         "provider_api": "OpenAI-compatible API",
         "api_url": "API Base URL:",
         "api_model": "Model:",
@@ -135,6 +136,7 @@ TEXT = {
         "reset_failed": "恢复默认失败。",
         "provider": "提供方：",
         "provider_cli": "Claude CLI",
+        "provider_codex": "Codex CLI",
         "provider_api": "OpenAI 兼容 API",
         "api_url": "API Base URL：",
         "api_model": "模型：",
@@ -146,8 +148,9 @@ TEXT = {
 }
 
 LANG_OPTIONS = {"English": "en", "中文": "zh"}
-PROVIDER_OPTIONS = {"Claude CLI": "claude_cli", "OpenAI-compatible API": "openai_compatible"}
-PROVIDER_LABELS = {v: k for k, v in PROVIDER_OPTIONS.items()}
+PROVIDER_KEYS = ("provider_cli", "provider_codex", "provider_api")
+PROVIDER_VALUES = {"provider_cli": "claude_cli", "provider_codex": "codex_cli", "provider_api": "openai_compatible"}
+PROVIDER_LABELS = {v: k for k, v in PROVIDER_VALUES.items()}
 LANG_LABELS = {v: k for k, v in LANG_OPTIONS.items()}
 
 
@@ -159,6 +162,22 @@ def load_monitor_config():
         return {"language": lang if lang in TEXT else "en"}
     except Exception:
         return {"language": "en"}
+
+
+def _provider_labels(t):
+    return [t[k] for k in PROVIDER_KEYS]
+
+
+def _provider_value(label, t):
+    for key in PROVIDER_KEYS:
+        if label == t[key]:
+            return PROVIDER_VALUES[key]
+    return "claude_cli"
+
+
+def _provider_label(value, t):
+    key = PROVIDER_LABELS.get(value, "provider_cli")
+    return t[key]
 
 
 def save_monitor_config(language):
@@ -288,7 +307,7 @@ class MonitorApp:
     def _save_prompt_config(self, win, text_widget, banned_entry, provider_combo, api_url_entry, api_model_entry, api_key_entry, clear_key_var):
         prompt = text_widget.get("1.0", tk.END).strip()
         banned_words = [x.strip() for x in banned_entry.get().split(",") if x.strip()]
-        provider = "openai_compatible" if provider_combo.get() == self.t["provider_api"] else "claude_cli"
+        provider = _provider_value(provider_combo.get(), self.t)
         payload = {
             "prompt": prompt,
             "banned_words": banned_words,
@@ -315,7 +334,7 @@ class MonitorApp:
         banned_entry.delete(0, tk.END)
         banned_entry.insert(0, ", ".join(cfg.get("banned_words", [])))
         if provider_combo is not None:
-            provider_combo.set(self.t["provider_api"] if cfg.get("provider", "claude_cli") == "openai_compatible" else self.t["provider_cli"])
+            provider_combo.set(_provider_label(cfg.get("provider", "claude_cli"), self.t))
         if api_url_entry is not None:
             api_url_entry.delete(0, tk.END)
             api_url_entry.insert(0, cfg.get("api_url", ""))
@@ -360,8 +379,8 @@ class MonitorApp:
         settings_frame = ttk.LabelFrame(win, text=self.t["provider"], padding=(10, 6, 10, 8))
         settings_frame.pack(fill=tk.X, padx=10, pady=(0, 8))
         ttk.Label(settings_frame, text=self.t["provider"]).grid(row=0, column=0, sticky=tk.W)
-        provider_combo = ttk.Combobox(settings_frame, values=[self.t["provider_cli"], self.t["provider_api"]], width=26, state="readonly")
-        provider_combo.set(self.t["provider_api"] if cfg.get("provider", "claude_cli") == "openai_compatible" else self.t["provider_cli"])
+        provider_combo = ttk.Combobox(settings_frame, values=_provider_labels(self.t), width=26, state="readonly")
+        provider_combo.set(_provider_label(cfg.get("provider", "claude_cli"), self.t))
         provider_combo.grid(row=0, column=1, sticky=tk.W, padx=(8, 12))
         ttk.Label(settings_frame, text=self.t["api_model"]).grid(row=0, column=2, sticky=tk.W)
         api_model_entry = ttk.Entry(settings_frame, width=24)
