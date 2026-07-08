@@ -24,7 +24,8 @@ from tkinter import messagebox, ttk
 
 BASE = "http://127.0.0.1:5000"
 MONITOR_LOCK_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "monitor.lock")
-REFRESH_INTERVAL = 2000  # 毫秒
+MONITOR_CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "monitor_config.json")
+REFRESH_INTERVAL = 2000  # milliseconds
 
 
 
@@ -54,6 +55,96 @@ def acquire_monitor_lock():
         print("Monitor GUI is already running; not starting a duplicate window.", flush=True)
         sys.exit(0)
 
+
+TEXT = {
+    "en": {
+        "connecting": "Connecting...",
+        "backend_disconnected": "● Backend disconnected",
+        "status": "Status",
+        "window": "Window",
+        "duration": "Duration",
+        "messages": "Messages",
+        "pause_refresh": "Pause refresh",
+        "auto_reply": "Auto-reply",
+        "prompt_button": "Prompt...",
+        "refresh_every": "Refresh every 2s",
+        "language": "Language",
+        "untitled": "(Untitled)",
+        "offline": "Offline",
+        "generating": "Generating",
+        "idle": "Idle",
+        "summary": "Active {alive}  |  Generating {gen}  |  Idle {idle}  |  Offline {dead}",
+        "auto_on": "Auto-reply ✓ on",
+        "auto_off": "Auto-reply ✗ off",
+        "prompt_title": "Supervisor Prompt",
+        "prompt_heading": "Supervisor prompt",
+        "advanced": "Advanced setting",
+        "editing_guide": "Editing guide",
+        "help_text": "You can change wording, language, examples, and strictness.\nKeep the output format: REPLY on the first line for a message, or SKIP on the first line to avoid replying.\nRecommended: keep {convo}; it marks where recent turns are inserted. If removed, the backend appends the conversation automatically.",
+        "banned_words": "Banned words (comma-separated):",
+        "save": "Save",
+        "cancel": "Cancel",
+        "reset_default": "Reset default",
+        "prompt_error_unavailable": "Backend is not connected or config is unavailable.",
+        "prompt_saved": "Prompt saved. The next auto-reply will use it.",
+        "save_failed": "Save failed: {error}",
+        "reset_failed": "Reset failed.",
+    },
+    "zh": {
+        "connecting": "连接中...",
+        "backend_disconnected": "● 后端未连接",
+        "status": "状态",
+        "window": "窗口",
+        "duration": "时长",
+        "messages": "消息",
+        "pause_refresh": "暂停刷新",
+        "auto_reply": "自动回复",
+        "prompt_button": "提示词...",
+        "refresh_every": "每 2 秒刷新",
+        "language": "语言",
+        "untitled": "(无标题)",
+        "offline": "掉线",
+        "generating": "生成中",
+        "idle": "空闲",
+        "summary": "活跃 {alive}  |  生成中 {gen}  |  空闲 {idle}  |  掉线 {dead}",
+        "auto_on": "自动回复 ✓ 开",
+        "auto_off": "自动回复 ✗ 关",
+        "prompt_title": "监督器提示词",
+        "prompt_heading": "监督器提示词",
+        "advanced": "高级设置",
+        "editing_guide": "编辑说明",
+        "help_text": "可以修改措辞、语言、例子和严格程度。\n请保留输出格式：第一行 REPLY 表示发送消息，第一行 SKIP 表示不回复。\n建议保留 {convo}，它表示插入最近对话的位置；如果删除，后端会自动把对话追加到 prompt 后面。",
+        "banned_words": "禁用词（逗号分隔）：",
+        "save": "保存",
+        "cancel": "取消",
+        "reset_default": "恢复默认",
+        "prompt_error_unavailable": "后端未连接，或配置不可用。",
+        "prompt_saved": "提示词已保存，下一次自动回复会使用它。",
+        "save_failed": "保存失败：{error}",
+        "reset_failed": "恢复默认失败。",
+    },
+}
+
+LANG_OPTIONS = {"English": "en", "中文": "zh"}
+LANG_LABELS = {v: k for k, v in LANG_OPTIONS.items()}
+
+
+def load_monitor_config():
+    try:
+        with open(MONITOR_CONFIG_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        lang = data.get("language", "en")
+        return {"language": lang if lang in TEXT else "en"}
+    except Exception:
+        return {"language": "en"}
+
+
+def save_monitor_config(language):
+    if language not in TEXT:
+        language = "en"
+    with open(MONITOR_CONFIG_PATH, "w", encoding="utf-8") as f:
+        json.dump({"language": language}, f, ensure_ascii=False, indent=2)
+
 def fetch(path):
     try:
         with urllib.request.urlopen(f"{BASE}{path}", timeout=5) as r:
@@ -77,14 +168,16 @@ def post_json(path, payload):
 class MonitorApp:
     def __init__(self, root):
         self.root = root
+        self.lang = load_monitor_config().get("language", "en")
+        self.t = TEXT[self.lang]
         root.title("ChatGPT Bridge Monitor")
-        root.geometry("560x440")
+        root.geometry("640x440")
         root.minsize(480, 300)
 
         # 顶部状态栏
         top = ttk.Frame(root, padding=8)
         top.pack(fill=tk.X)
-        self.lbl_status = ttk.Label(top, text="Connecting...", font=("Consolas", 10, "bold"))
+        self.lbl_status = ttk.Label(top, text=self.t["connecting"], font=("Consolas", 10, "bold"))
         self.lbl_status.pack(side=tk.LEFT)
         self.lbl_sup = ttk.Label(top, text="", font=("Consolas", 9))
         self.lbl_sup.pack(side=tk.RIGHT)
@@ -95,10 +188,10 @@ class MonitorApp:
 
         cols = ("status", "title", "duration", "msgs")
         self.tree = ttk.Treeview(frame, columns=cols, show="headings", height=15)
-        self.tree.heading("status", text="状态")
-        self.tree.heading("title", text="窗口")
-        self.tree.heading("duration", text="时长")
-        self.tree.heading("msgs", text="消息")
+        self.tree.heading("status", text=self.t["status"])
+        self.tree.heading("title", text=self.t["window"])
+        self.tree.heading("duration", text=self.t["duration"])
+        self.tree.heading("msgs", text=self.t["messages"])
         self.tree.column("status", width=50, anchor=tk.CENTER)
         self.tree.column("title", width=280, anchor=tk.W)
         self.tree.column("duration", width=120, anchor=tk.CENTER)
@@ -119,16 +212,24 @@ class MonitorApp:
         bottom = ttk.Frame(root, padding=(8, 0, 8, 8))
         bottom.pack(fill=tk.X)
         self.var_pause = tk.BooleanVar(value=False)
-        ttk.Checkbutton(bottom, text="Pause refresh", variable=self.var_pause).pack(side=tk.LEFT)
+        self.chk_pause = ttk.Checkbutton(bottom, text=self.t["pause_refresh"], variable=self.var_pause)
+        self.chk_pause.pack(side=tk.LEFT)
 
         # Auto-reply toggle
         self.var_autoreply = tk.BooleanVar(value=True)
-        self.btn_autoreply = ttk.Checkbutton(bottom, text="Auto-reply", variable=self.var_autoreply, command=self._toggle_autoreply)
+        self.btn_autoreply = ttk.Checkbutton(bottom, text=self.t["auto_reply"], variable=self.var_autoreply, command=self._toggle_autoreply)
         self.btn_autoreply.pack(side=tk.LEFT, padx=(15, 0))
-        self.btn_prompt = ttk.Button(bottom, text="Prompt...", command=self._edit_prompt)
+        self.btn_prompt = ttk.Button(bottom, text=self.t["prompt_button"], command=self._edit_prompt)
         self.btn_prompt.pack(side=tk.LEFT, padx=(8, 0))
 
-        ttk.Label(bottom, text="Refresh every 2s", font=("Consolas", 8), foreground="#999").pack(side=tk.RIGHT)
+        self.lbl_refresh = ttk.Label(bottom, text=self.t["refresh_every"], font=("Consolas", 8), foreground="#999")
+        self.lbl_refresh.pack(side=tk.RIGHT)
+        self.lang_combo = ttk.Combobox(bottom, values=list(LANG_OPTIONS.keys()), width=8, state="readonly")
+        self.lang_combo.set(LANG_LABELS.get(self.lang, "English"))
+        self.lang_combo.pack(side=tk.RIGHT, padx=(8, 0))
+        self.lang_combo.bind("<<ComboboxSelected>>", self._change_language)
+        self.lbl_language = ttk.Label(bottom, text=self.t["language"] + ":")
+        self.lbl_language.pack(side=tk.RIGHT)
 
         # 记录每个页面进入当前状态的时间(用于算累积时长)
         # key: page_id, value: (状态名, 进入时刻)
@@ -136,10 +237,28 @@ class MonitorApp:
 
         self._refresh()
 
+    def _change_language(self, event=None):
+        selected = self.lang_combo.get()
+        self.lang = LANG_OPTIONS.get(selected, "en")
+        self.t = TEXT[self.lang]
+        save_monitor_config(self.lang)
+        self._apply_language()
+        self._update()
+
+    def _apply_language(self):
+        self.tree.heading("status", text=self.t["status"])
+        self.tree.heading("title", text=self.t["window"])
+        self.tree.heading("duration", text=self.t["duration"])
+        self.tree.heading("msgs", text=self.t["messages"])
+        self.chk_pause.configure(text=self.t["pause_refresh"])
+        self.btn_autoreply.configure(text=self.t["auto_reply"])
+        self.btn_prompt.configure(text=self.t["prompt_button"])
+        self.lbl_refresh.configure(text=self.t["refresh_every"])
+        self.lbl_language.configure(text=self.t["language"] + ":")
     def _load_prompt_config(self):
         cfg = fetch("/supervisor_config")
         if not cfg or not cfg.get("ok"):
-            messagebox.showerror("Prompt", "Backend is not connected or config is unavailable.")
+            messagebox.showerror(self.t["prompt_title"], self.t["prompt_error_unavailable"])
             return None
         return cfg
 
@@ -148,15 +267,15 @@ class MonitorApp:
         banned_words = [x.strip() for x in banned_entry.get().split(",") if x.strip()]
         result = post_json("/supervisor_config", {"prompt": prompt, "banned_words": banned_words})
         if result and result.get("ok"):
-            messagebox.showinfo("Prompt", "Prompt saved. The next auto-reply will use it.")
+            messagebox.showinfo(self.t["prompt_title"], self.t["prompt_saved"])
             win.destroy()
         else:
-            messagebox.showerror("Prompt", f"Save failed: {(result or {}).get('error', 'unknown error')}")
+            messagebox.showerror(self.t["prompt_title"], self.t["save_failed"].format(error=(result or {}).get('error', 'unknown error')))
 
     def _reset_prompt_config(self, text_widget, banned_entry):
         cfg = fetch("/supervisor_config/reset")
         if not cfg or not cfg.get("ok"):
-            messagebox.showerror("Prompt", "Reset failed.")
+            messagebox.showerror(self.t["prompt_title"], self.t["reset_failed"])
             return
         text_widget.delete("1.0", tk.END)
         text_widget.insert("1.0", cfg.get("prompt", ""))
@@ -168,7 +287,7 @@ class MonitorApp:
         if cfg is None:
             return
         win = tk.Toplevel(self.root)
-        win.title("Supervisor Prompt")
+        win.title(self.t["prompt_title"])
         win.geometry("820x640")
         win.minsize(620, 500)
         win.transient(self.root)
@@ -176,16 +295,12 @@ class MonitorApp:
 
         header = ttk.Frame(win, padding=(10, 10, 10, 4))
         header.pack(fill=tk.X)
-        ttk.Label(header, text="Supervisor prompt", font=("Segoe UI", 10, "bold")).pack(side=tk.LEFT)
-        ttk.Label(header, text="Advanced setting", foreground="#666").pack(side=tk.RIGHT)
+        ttk.Label(header, text=self.t["prompt_heading"], font=("Segoe UI", 10, "bold")).pack(side=tk.LEFT)
+        ttk.Label(header, text=self.t["advanced"], foreground="#666").pack(side=tk.RIGHT)
 
-        help_frame = ttk.LabelFrame(win, text="Editing guide", padding=(10, 6, 10, 8))
+        help_frame = ttk.LabelFrame(win, text=self.t["editing_guide"], padding=(10, 6, 10, 8))
         help_frame.pack(fill=tk.X, padx=10, pady=(0, 8))
-        help_text = (
-            "You can change wording, language, examples, and strictness.\n"
-            "Keep the output format: REPLY on the first line for a message, or SKIP on the first line to avoid replying.\n"
-            "Recommended: keep {convo}; it marks where recent turns are inserted. If removed, the backend appends the conversation automatically."
-        )
+        help_text = self.t["help_text"]
         ttk.Label(help_frame, text=help_text, justify=tk.LEFT, wraplength=720).pack(anchor=tk.W)
 
         body = ttk.Frame(win, padding=(10, 0, 10, 8))
@@ -199,16 +314,16 @@ class MonitorApp:
 
         banned_frame = ttk.Frame(win, padding=(10, 0, 10, 8))
         banned_frame.pack(fill=tk.X)
-        ttk.Label(banned_frame, text="Banned words (comma-separated):").pack(side=tk.LEFT)
+        ttk.Label(banned_frame, text=self.t["banned_words"]).pack(side=tk.LEFT)
         banned_entry = ttk.Entry(banned_frame)
         banned_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(8, 0))
         banned_entry.insert(0, ", ".join(cfg.get("banned_words", [])))
 
         buttons = ttk.Frame(win, padding=(10, 0, 10, 10))
         buttons.pack(fill=tk.X)
-        ttk.Button(buttons, text="Save", command=lambda: self._save_prompt_config(win, text_widget, banned_entry)).pack(side=tk.RIGHT)
-        ttk.Button(buttons, text="Cancel", command=win.destroy).pack(side=tk.RIGHT, padx=(0, 8))
-        ttk.Button(buttons, text="Reset default", command=lambda: self._reset_prompt_config(text_widget, banned_entry)).pack(side=tk.LEFT)
+        ttk.Button(buttons, text=self.t["save"], command=lambda: self._save_prompt_config(win, text_widget, banned_entry)).pack(side=tk.RIGHT)
+        ttk.Button(buttons, text=self.t["cancel"], command=win.destroy).pack(side=tk.RIGHT, padx=(0, 8))
+        ttk.Button(buttons, text=self.t["reset_default"], command=lambda: self._reset_prompt_config(text_widget, banned_entry)).pack(side=tk.LEFT)
 
     def _toggle_autoreply(self):
         """Toggle auto-reply."""
@@ -228,7 +343,7 @@ class MonitorApp:
         data = fetch("/all_snapshots")
 
         if status is None and data is None:
-            self.lbl_status.config(text="● Backend disconnected", foreground="#cc3333")
+            self.lbl_status.config(text=self.t["backend_disconnected"], foreground="#cc3333")
             self.lbl_sup.config(text="")
             return
 
@@ -268,7 +383,7 @@ class MonitorApp:
 
         alive_n = gen_n = idle_n = dead_n = 0
         for p, pid, state_name, dur in page_infos:
-            title = (p.get("title") or "").strip()[:25] or "(无标题)"
+            title = (p.get("title") or "").strip()[:25] or self.t["untitled"]
             msgs = p.get("assistantCount", 0)
             dur_seconds = int(dur)
 
@@ -284,7 +399,7 @@ class MonitorApp:
                 tag = "idle_long"
 
             # 格式化时长
-            label = "掉线" if state_name=="dead" else ("生成" if state_name=="gen" else "停")
+            label = self.t["offline"] if state_name=="dead" else (self.t["generating"] if state_name=="gen" else self.t["idle"])
             if dur_seconds >= 3600:
                 dur_s = f"{label} {dur_seconds//3600}h{(dur_seconds%3600)//60}m"
             elif dur_seconds >= 60:
@@ -300,11 +415,11 @@ class MonitorApp:
         if self.var_autoreply.get() != sup_on:
             self.var_autoreply.set(sup_on)
         self.lbl_status.config(
-            text=f"活跃 {alive_n}  |  生成 {gen_n}  |  空闲 {idle_n}  |  掉线 {dead_n}",
+            text=self.t["summary"].format(alive=alive_n, gen=gen_n, idle=idle_n, dead=dead_n),
             foreground="#333333",
         )
         self.lbl_sup.config(
-            text=f"Auto-reply {'✓ on' if sup_on else '✗ off'}",
+            text=self.t["auto_on"] if sup_on else self.t["auto_off"],
             foreground="#2a8a2a" if sup_on else "#cc3333",
         )
 

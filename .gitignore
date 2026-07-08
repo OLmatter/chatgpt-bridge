@@ -11,3 +11,5 @@ Thumbs.db
 local/supervisor_config.json
 local/launcher.lock
 local/monitor.lock
+local/monitor_config.json
+local/monitor_config.json
