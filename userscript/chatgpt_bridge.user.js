@@ -97,7 +97,7 @@ const POLL_INTERVAL = 400;                      // 轮询间隔(ms)
           || document.querySelector('rich-textarea [contenteditable="true"]')
           || document.querySelector('textarea');
     }
-    if (SITE === 'doubao') {
+    if (SITE === 'doubao' || SITE === 'dola') {
       // 豆包: contenteditable 富文本输入
       return document.querySelector('div[contenteditable="true"][data-testid*="input"]')
           || document.querySelector('[data-testid="chat_input_input"]')
@@ -105,8 +105,12 @@ const POLL_INTERVAL = 400;                      // 轮询间隔(ms)
           || document.querySelector('textarea[placeholder]')
           || document.querySelector('textarea');
     }
-    if (SITE === 'duck' || SITE === 'huggingchat' || SITE === 'dola') {
-      // Duck.ai/HuggingChat/Dola: textarea
+    if (SITE === 'duck' || SITE === 'huggingchat') {
+      // Duck.ai/HuggingChat: textarea
+      return document.querySelector('textarea');
+    }
+    if (SITE === 'dola') {
+      // Dola: 和豆包同框架,textarea
       return document.querySelector('textarea');
     }
     // ChatGPT
@@ -119,7 +123,7 @@ const POLL_INTERVAL = 400;                      // 轮询间隔(ms)
     if (SITE === 'gemini') {
       return document.querySelectorAll('model-response, .model-response-text').length;
     }
-    if (SITE === 'doubao') {
+    if (SITE === 'doubao' || SITE === 'dola') {
       // 豆包: v_list_row 里文本>50字的算AI回复
       let count = 0;
       document.querySelectorAll('[class*="v_list_row"]').forEach(e => {
@@ -148,8 +152,8 @@ const POLL_INTERVAL = 400;                      // 轮询间隔(ms)
     let lastAssistant = '';
     let msgCount = 0;
 
-    if (SITE === 'doubao') {
-      // 豆包: v_list_row 是每条消息,用户和AI交替(用文本长度判断AI回复)
+    if (SITE === 'doubao' || SITE === 'dola') {
+      // 豆包/Dola: 同框架, v_list_row 是每条消息
       const rows = document.querySelectorAll('[class*="v_list_row"]');
       const totalD = rows.length;
       msgCount = 0;
@@ -157,15 +161,13 @@ const POLL_INTERVAL = 400;                      // 轮询间隔(ms)
         const t = rows[i];
         const txt = t.innerText.trim();
         if (!txt) continue;
-        // AI回复通常较长(>50字)或含"搜索"
-        const isAI = txt.length > 50 || txt.includes('搜索');
+        const isAI = txt.length > 20;
         if (isAI) msgCount++;
         recent.push({ role: isAI ? 'assistant' : 'user', text: txt.slice(-600) });
       }
-      // 最后一条AI回复: 从后往前找文本长的
       for (let i = totalD - 1; i >= 0; i--) {
         const txt = rows[i].innerText.trim();
-        if (txt.length > 50) {
+        if (txt.length > 20) {
           lastAssistant = txt.slice(-1000);
           break;
         }
@@ -225,7 +227,7 @@ const POLL_INTERVAL = 400;                      // 轮询间隔(ms)
       }
       return false;
     }
-    if (SITE === 'doubao') {
+    if (SITE === 'doubao' || SITE === 'dola') {
       // 豆包: 生成时有停止按钮或 loading 状态
       for (const s of ['button[data-testid*="stop"]', 'button[aria-label*="停止"]', '.loading', '[class*="loading"]', '[class*="generating"]']) {
         const b = document.querySelector(s);
@@ -255,7 +257,7 @@ const POLL_INTERVAL = 400;                      // 轮询间隔(ms)
       if (responses.length) return responses[responses.length - 1].innerText.trim();
       return '';
     }
-    if (SITE === 'doubao') {
+    if (SITE === 'doubao' || SITE === 'dola') {
       // 豆包: 从后往前找文本>50字的v_list_row
       const rows = document.querySelectorAll('[class*="v_list_row"]');
       for (let i = rows.length - 1; i >= 0; i--) {
@@ -333,7 +335,7 @@ const POLL_INTERVAL = 400;                      // 轮询间隔(ms)
       location.href = 'https://gemini.google.com/app';
       return 'ok';
     }
-    if (SITE === 'doubao') {
+    if (SITE === 'doubao' || SITE === 'dola') {
       location.href = 'https://www.doubao.com/chat';
       return 'ok';
     }
