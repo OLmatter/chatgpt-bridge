@@ -1,11 +1,12 @@
 // ==UserScript==
-// @name         ChatGPT WebUI Bridge
-// @namespace    https://github.com/yourname/chatgpt-bridge
-// @version      1.0.0
-// @description  Expose logged-in ChatGPT pages to a local agent through an HTTP bridge. Supports multiple tabs, snapshots, and auto-reconnect.
+// @name         AI WebUI Bridge (ChatGPT + Gemini)
+// @namespace    https://github.com/OLmatter/chatgpt-bridge
+// @version      2.0.0
+// @description  把已登录的 ChatGPT / Gemini 页面通过 HTTP 桥接暴露给本地 agent。支持多窗口、快照回传、自动重连。
 // @author       You
 // @match        https://chatgpt.com/*
 // @match        https://chat.openai.com/*
+// @match        https://gemini.google.com/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM.xmlHttpRequest
 // @connect      127.0.0.1
@@ -14,17 +15,20 @@
 // ==/UserScript==
 
 // ====================== 配置(按需修改) ======================
-const BACKEND_URL = 'http://127.0.0.1:5000';  // Backend URL
+const BACKEND_URL = 'http://127.0.0.1:5000';  // 后端地址
 const POLL_INTERVAL = 400;                      // 轮询间隔(ms)
 // =============================================================
 
 (function () {
   'use strict';
 
-  // Run only in the main page, not inside iframes such as sentinel frames.
+  // 只在主页面运行,不在 iframe(如 sentinel frame)里跑
   if (window.top !== window.self) return;
 
   const BASE = BACKEND_URL;
+
+  // 检测当前是哪个 AI 网站
+  const SITE = location.hostname.includes('gemini') ? 'gemini' : 'chatgpt';
 
   // GM_xmlhttpRequest(绕过 CSP)
   const G = typeof GM_xmlhttpRequest !== 'undefined'
@@ -59,7 +63,7 @@ const POLL_INTERVAL = 400;                      // 轮询间隔(ms)
   }
   const PAGE_ID = genPageId();
 
-  // ====== Status badge (top-right corner) ======
+  // ====== 状态标签(页面右上角)======
   const badge = document.createElement('div');
   badge.style.cssText = `
     position: fixed; top: 10px; right: 10px; z-index: 999999;
@@ -67,7 +71,7 @@ const POLL_INTERVAL = 400;                      // 轮询间隔(ms)
     border-radius: 12px; font: 12px monospace; opacity: 0.85;
     box-shadow: 0 2px 8px rgba(0,0,0,0.3); pointer-events: none;
   `;
-  badge.textContent = 'Bridge: starting';
+  badge.textContent = 'Bridge: 启动中';
   document.body.appendChild(badge);
 
   function setStatus(text, color) {
@@ -75,14 +79,26 @@ const POLL_INTERVAL = 400;                      // 轮询间隔(ms)
     badge.style.background = color || '#888';
   }
 
-  // ====== Page snapshot sent back to backend ======
+  // ====== 页面快照(回传给后端)======
   function getEditor() {
+    if (SITE === 'gemini') {
+      // Gemini: rich text editor (contenteditable) 或 textarea
+      return document.querySelector('div[contenteditable="true"][role="textbox"]')
+          || document.querySelector('.ql-editor[contenteditable="true"]')
+          || document.querySelector('rich-textarea [contenteditable="true"]')
+          || document.querySelector('textarea');
+    }
+    // ChatGPT
     return document.querySelector('div[contenteditable="true"][role="textbox"]')
         || document.querySelector('textarea[name="prompt-textarea"]')
         || document.querySelector('#prosemirror-editor-container [contenteditable]');
   }
 
   function countAssistant() {
+    if (SITE === 'gemini') {
+      // Gemini: model-response 类
+      return document.querySelectorAll('model-response, .model-response-text').length;
+    }
     return document.querySelectorAll('[data-message-author-role="assistant"]').length;
   }
 
@@ -94,46 +110,67 @@ const POLL_INTERVAL = 400;                      // 轮询间隔(ms)
     return false;
   }
 
-  function hasConversationLimit() {
-    const text = (document.body && document.body.innerText ? document.body.innerText : '').toLowerCase();
-    return text.includes("you've reached the maximum length for this conversation")
-      || text.includes('you have reached the maximum length for this conversation')
-      || text.includes('maximum length for this conversation')
-      || text.includes('starting a new chat')
-      || text.includes('start a new chat')
-      || text.includes('达到此对话的最大长度')
-      || text.includes('对话的最大长度');
-  }
-
   function getSnapshot() {
     const editor = getEditor();
-    const turns = document.querySelectorAll('[data-message-author-role]');
-    const recent = [];
-    const total = turns.length;
-    for (let i = Math.max(0, total - 6); i < total; i++) {
-      const t = turns[i];
-      const role = t.getAttribute('data-message-author-role');
-      const md = t.querySelector('.markdown');
-      recent.push({ role, text: (md ? md.innerText : t.innerText).trim().slice(-600) });
+    let recent = [];
+    let lastAssistant = '';
+    let msgCount = 0;
+
+    if (SITE === 'gemini') {
+      // Gemini: user-query 和 model-response 交替
+      const queries = document.querySelectorAll('user-query, .user-query');
+      const responses = document.querySelectorAll('model-response, .model-response-text, .response-container');
+      msgCount = responses.length;
+      // 拼最近对话
+      const allTurns = document.querySelectorAll('user-query, model-response, .query-text, .model-response-text');
+      const totalG = allTurns.length;
+      for (let i = Math.max(0, totalG - 6); i < totalG; i++) {
+        const t = allTurns[i];
+        const tag = t.tagName.toLowerCase();
+        const role = (tag.includes('user') || tag.includes('query')) ? 'user' : 'assistant';
+        recent.push({ role, text: t.innerText.trim().slice(-600) });
+      }
+      if (responses.length) {
+        lastAssistant = responses[responses.length - 1].innerText.trim().slice(-1000);
+      }
+    } else {
+      // ChatGPT
+      const turns = document.querySelectorAll('[data-message-author-role]');
+      const total = turns.length;
+      for (let i = Math.max(0, total - 6); i < total; i++) {
+        const t = turns[i];
+        const role = t.getAttribute('data-message-author-role');
+        const md = t.querySelector('.markdown');
+        recent.push({ role, text: (md ? md.innerText : t.innerText).trim().slice(-600) });
+      }
+      const msgs = document.querySelectorAll('[data-message-author-role="assistant"]');
+      msgCount = msgs.length;
+      if (msgs.length) {
+        lastAssistant = (msgs[msgs.length - 1].querySelector('.markdown') || msgs[msgs.length - 1]).innerText.trim().slice(-1000);
+      }
     }
-    const msgs = document.querySelectorAll('[data-message-author-role="assistant"]');
-    const lastAssistant = msgs.length
-      ? (msgs[msgs.length - 1].querySelector('.markdown') || msgs[msgs.length - 1]).innerText.trim().slice(-1000)
-      : '';
+
     return {
+      site: SITE,
       url: location.href,
       title: document.title,
       hasEditor: !!editor,
       editorText: editor ? (editor.innerText || editor.value || '').slice(0, 200) : '',
-      assistantCount: msgs.length,
+      assistantCount: msgCount,
       isGenerating: isGenerating(),
-      conversationLimited: hasConversationLimit(),
       recentTurns: recent,
       lastAssistant,
     };
   }
 
   function isGenerating() {
+    if (SITE === 'gemini') {
+      for (const s of ['button[aria-label*="止"]', 'button[aria-label*="top"]', 'mat-progress-spinner', '.loading-indicator', 'mat-spinner']) {
+        const b = document.querySelector(s);
+        if (b && b.offsetParent !== null) return true;
+      }
+      return false;
+    }
     for (const s of ['button[data-testid="stop-button"]', 'button[aria-label="停止"]', 'button[aria-label="Stop"]', 'button[aria-label*="止"]', 'button[aria-label*="top"]']) {
       const b = document.querySelector(s);
       if (b && b.offsetParent !== null) return true;
@@ -143,10 +180,21 @@ const POLL_INTERVAL = 400;                      // 轮询间隔(ms)
     return false;
   }
 
+  function getLastReply() {
+    if (SITE === 'gemini') {
+      const responses = document.querySelectorAll('model-response, .model-response-text, .response-container');
+      if (responses.length) return responses[responses.length - 1].innerText.trim();
+      return '';
+    }
+    const msgs = document.querySelectorAll('[data-message-author-role="assistant"]');
+    if (msgs.length) return (msgs[msgs.length - 1].querySelector('.markdown') || msgs[msgs.length - 1]).innerText.trim();
+    return '';
+  }
+
   // ====== 命令执行 ======
   async function sendMessage(text) {
     const editor = getEditor();
-    if (!editor) throw new Error('input editor not found (not logged in?)');
+    if (!editor) throw new Error('找不到输入框(未登录?)');
     const before = countAssistant();
     editor.focus();
     await sleep(150);
@@ -159,15 +207,18 @@ const POLL_INTERVAL = 400;                      // 轮询间隔(ms)
       document.execCommand('insertText', false, text);
     }
     await sleep(400);
-    // Press Enter to send. If that fails, click the send button as fallback after 2 seconds.
+    // Enter 发送,2秒后检查是否成功,失败则点发送按钮兜底
     editor.dispatchEvent(new KeyboardEvent('keydown', {
       key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true,
     }));
     await sleep(2000);
     if ((editor.innerText || editor.value || '').trim().length > 0) {
-      for (const sel of ['button[data-testid="send-button"]', 'button[aria-label="发送"]', 'button[aria-label="Send"]', 'form button[type="submit"]']) {
+      const sendBtns = SITE === 'gemini'
+        ? ['button[aria-label="发送消息"]', 'button[aria-label="Send message"]', 'button.send-button', '.send-button-container button', 'mat-icon[fonticon="send"]']
+        : ['button[data-testid="send-button"]', 'button[aria-label="发送"]', 'button[aria-label="Send"]', 'form button[type="submit"]'];
+      for (const sel of sendBtns) {
         const btn = document.querySelector(sel);
-        if (btn && btn.offsetParent !== null && !btn.disabled) { btn.click(); break; }
+        if (btn && btn.offsetParent !== null) { btn.click(); break; }
       }
       await sleep(1500);
     }
@@ -184,21 +235,20 @@ const POLL_INTERVAL = 400;                      // 轮询间隔(ms)
       if (gen) genDetected = true;
       if (sawNew && genDetected && !gen && Date.now() - start > 3000) {
         await sleep(1000);
-        const n = countAssistant();
-        if (n) return (document.querySelectorAll('[data-message-author-role="assistant"]')[n - 1].querySelector('.markdown')
-          || document.querySelectorAll('[data-message-author-role="assistant"]')[n - 1]).innerText.trim();
-        return '';
+        return getLastReply();
       }
       if (sawNew && !genDetected && Date.now() - start > 5000) {
-        const n = countAssistant();
-        if (n) return (document.querySelectorAll('[data-message-author-role="assistant"]')[n - 1].querySelector('.markdown')
-          || document.querySelectorAll('[data-message-author-role="assistant"]')[n - 1]).innerText.trim();
+        return getLastReply();
       }
     }
     return sawNew ? '[超时但有回复]' : '[超时:无回复]';
   }
 
   function newChat() {
+    if (SITE === 'gemini') {
+      location.href = 'https://gemini.google.com/app';
+      return 'ok';
+    }
     for (const sel of ['a[href="/"]', 'a[data-testid="new-chat"]']) {
       const el = document.querySelector(sel);
       if (el) { el.click(); return 'ok'; }
@@ -210,7 +260,7 @@ const POLL_INTERVAL = 400;                      // 轮询间隔(ms)
   async function processCommand(cmd) {
     if (cmd.cmd === 'send') return { ok: true, reply: await sendMessage(cmd.text) };
     if (cmd.cmd === 'new_chat') return { ok: true, result: newChat() };
-    return { ok: false, error: 'unknown command: ' + cmd.cmd };
+    return { ok: false, error: 'unknown: ' + cmd.cmd };
   }
 
   function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
@@ -223,27 +273,27 @@ const POLL_INTERVAL = 400;                      // 轮询间隔(ms)
       try {
         // 强制 busy 复位:超过 60 秒说明卡死了
         if (busy && Date.now() - busySince > 60000) {
-          console.log('[Bridge] busy timeout; forcing reset');
+          console.log('[Bridge] busy 超时强制复位');
           busy = false;
         }
-        // Always send snapshots back, even while busy, so backend can see generation progress and page state.
+        // 始终回传快照(即使 busy,让后端看到生成进度和页面状态)
         const snap = getSnapshot();
         const resp = await gmFetch('POST', '/poll', { page_id: PAGE_ID, snapshot: snap });
         if (resp && resp.cmd && !busy) {
           busy = true;
           busySince = Date.now();
-          setStatus('running: ' + (resp.cmd === 'send' ? 'send' : resp.cmd), '#c83');
+          setStatus('执行: ' + (resp.cmd === 'send' ? '发送' : resp.cmd), '#c83');
           // 关键:命令处理放独立异步函数,不阻塞 poll 循环
           executeCommand(resp);
         }
-        // Show running state while busy; otherwise show ready state.
+        // busy 时显示执行中,否则显示就绪
         if (busy) {
-          setStatus('running...' + (snap ? ` (${snap.assistantCount} msg${snap.assistantCount === 1 ? '' : 's'} ${snap.isGenerating ? '...' : ''})` : ''), '#c83');
+          setStatus('执行中...' + (snap ? ` (${snap.assistantCount}条 ${snap.isGenerating ? '⏳' : ''})` : ''), '#c83');
         } else {
-          setStatus('ready' + (snap ? ` (${snap.assistantCount} msg${snap.assistantCount === 1 ? '' : 's'})` : ''), '#2a2');
+          setStatus('就绪' + (snap ? ` (${snap.assistantCount}条)` : ''), '#2a2');
         }
       } catch (e) {
-        setStatus('waiting for service...', '#c33');
+        setStatus('等待服务...', '#c33');
       }
       await sleep(POLL_INTERVAL);
     }
@@ -266,25 +316,25 @@ const POLL_INTERVAL = 400;                      // 轮询间隔(ms)
     }
   }
 
-  // ====== Anti-throttling: recover immediately when the page becomes visible ======
+  // ====== 抗节流:页面重新可见时立即恢复 ======
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden && !busy) {
       gmFetch('POST', '/poll', { page_id: PAGE_ID, snapshot: getSnapshot() }).catch(() => {});
-      setStatus('ready (resumed)', '#2a2');
+      setStatus('就绪(恢复)', '#2a2');
     }
   });
   window.addEventListener('pageshow', (e) => {
     if (e.persisted) {
-      gmFetch('POST', '/register', { page_id: PAGE_ID, url: location.href, title: document.title }).catch(() => {});
-      setStatus('ready (BFCache)', '#2a2');
+      gmFetch('POST', '/register', { page_id: PAGE_ID, page: SITE, url: location.href, title: document.title }).catch(() => {});
+      setStatus('就绪(BFCache)', '#2a2');
     }
   });
 
   // ====== 启动 ======
-  setStatus('connecting...', '#c83');
-  gmFetch('POST', '/register', { page_id: PAGE_ID, url: location.href, title: document.title })
-    .then(() => setStatus('ready', '#2a2'))
-    .catch(() => setStatus('service offline', '#c33'));
+  setStatus('连接中...', '#c83');
+  gmFetch('POST', '/register', { page_id: PAGE_ID, page: SITE, url: location.href, title: document.title })
+    .then(() => setStatus(`${SITE} 就绪`, '#2a2'))
+    .catch(() => setStatus('服务未启动', '#c33'));
   poll();
-  console.log('[ChatGPT Bridge] loaded, backend:', BASE, 'page id:', PAGE_ID);
+  console.log('[ChatGPT Bridge] 已加载, 后端:', BASE, '页面ID:', PAGE_ID);
 })();
