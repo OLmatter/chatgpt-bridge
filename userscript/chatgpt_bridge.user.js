@@ -108,8 +108,12 @@ const POLL_INTERVAL = 400;                      // 轮询间隔(ms)
       return document.querySelectorAll('model-response, .model-response-text').length;
     }
     if (SITE === 'doubao') {
-      // 豆包: AI 回复的消息块(具体class需实际确认)
-      return document.querySelectorAll('[data-testid*="receive"], .receive-message, [class*="receiver"]').length;
+      // 豆包: v_list_row 里文本>50字的算AI回复
+      let count = 0;
+      document.querySelectorAll('[class*="v_list_row"]').forEach(e => {
+        if (e.innerText.trim().length > 50) count++;
+      });
+      return count;
     }
     return document.querySelectorAll('[data-message-author-role="assistant"]').length;
   }
@@ -129,19 +133,26 @@ const POLL_INTERVAL = 400;                      // 轮询间隔(ms)
     let msgCount = 0;
 
     if (SITE === 'doubao') {
-      // 豆包: 用户消息和AI回复交替(具体选择器需实际确认)
-      const responses = document.querySelectorAll('[data-testid*="receive"], .receive-message, [class*="receiver"]');
-      msgCount = responses.length;
-      const allTurns = document.querySelectorAll('[data-testid*="message"], [class*="message-content"], [class*="bubble"]');
-      const totalD = allTurns.length;
+      // 豆包: v_list_row 是每条消息,用户和AI交替(用文本长度判断AI回复)
+      const rows = document.querySelectorAll('[class*="v_list_row"]');
+      const totalD = rows.length;
+      msgCount = 0;
       for (let i = Math.max(0, totalD - 6); i < totalD; i++) {
-        const t = allTurns[i];
-        const cls = t.className || '';
-        const role = (cls.includes('send') || cls.includes('sender')) ? 'user' : 'assistant';
-        recent.push({ role, text: t.innerText.trim().slice(-600) });
+        const t = rows[i];
+        const txt = t.innerText.trim();
+        if (!txt) continue;
+        // AI回复通常较长(>50字)或含"搜索"
+        const isAI = txt.length > 50 || txt.includes('搜索');
+        if (isAI) msgCount++;
+        recent.push({ role: isAI ? 'assistant' : 'user', text: txt.slice(-600) });
       }
-      if (responses.length) {
-        lastAssistant = responses[responses.length - 1].innerText.trim().slice(-1000);
+      // 最后一条AI回复: 从后往前找文本长的
+      for (let i = totalD - 1; i >= 0; i--) {
+        const txt = rows[i].innerText.trim();
+        if (txt.length > 50) {
+          lastAssistant = txt.slice(-1000);
+          break;
+        }
       }
     } else if (SITE === 'gemini') {
       const queries = document.querySelectorAll('user-query, .user-query');
@@ -221,8 +232,12 @@ const POLL_INTERVAL = 400;                      // 轮询间隔(ms)
       return '';
     }
     if (SITE === 'doubao') {
-      const responses = document.querySelectorAll('[data-testid*="receive"], .receive-message, [class*="receiver"]');
-      if (responses.length) return responses[responses.length - 1].innerText.trim();
+      // 豆包: 从后往前找文本>50字的v_list_row
+      const rows = document.querySelectorAll('[class*="v_list_row"]');
+      for (let i = rows.length - 1; i >= 0; i--) {
+        const txt = rows[i].innerText.trim();
+        if (txt.length > 50) return txt;
+      }
       return '';
     }
     const msgs = document.querySelectorAll('[data-message-author-role="assistant"]');
