@@ -1,13 +1,15 @@
 // ==UserScript==
-// @name         AI WebUI Bridge (ChatGPT + Gemini + Doubao)
+// @name         AI WebUI Bridge (ChatGPT + Gemini + Doubao + Duck.ai + HuggingChat)
 // @namespace    https://github.com/OLmatter/chatgpt-bridge
-// @version      2.1.0
-// @description  把已登录的 ChatGPT / Gemini / 豆包 页面通过 HTTP 桥接暴露给本地 agent。支持多窗口、快照回传、自动重连。
+// @version      2.2.0
+// @description  把已登录的 ChatGPT/Gemini/豆包/Duck.ai/HuggingChat 页面通过 HTTP 桥接暴露给本地 agent。
 // @author       You
 // @match        https://chatgpt.com/*
 // @match        https://chat.openai.com/*
 // @match        https://gemini.google.com/*
 // @match        https://www.doubao.com/*
+// @match        https://duck.ai/*
+// @match        https://huggingface.co/chat*
 // @grant        GM_xmlhttpRequest
 // @grant        GM.xmlHttpRequest
 // @connect      127.0.0.1
@@ -30,7 +32,11 @@ const POLL_INTERVAL = 400;                      // 轮询间隔(ms)
 
   // 检测当前是哪个 AI 网站
   const HOST = location.hostname;
-  const SITE = HOST.includes('gemini') ? 'gemini' : (HOST.includes('doubao') ? 'doubao' : 'chatgpt');
+  const SITE = HOST.includes('gemini') ? 'gemini'
+    : HOST.includes('doubao') ? 'doubao'
+    : HOST.includes('duck.ai') || HOST.includes('duckduckgo') ? 'duck'
+    : HOST.includes('huggingface') ? 'huggingchat'
+    : 'chatgpt';
 
   // GM_xmlhttpRequest(绕过 CSP)
   const G = typeof GM_xmlhttpRequest !== 'undefined'
@@ -97,6 +103,14 @@ const POLL_INTERVAL = 400;                      // 轮询间隔(ms)
           || document.querySelector('textarea[placeholder]')
           || document.querySelector('textarea');
     }
+    if (SITE === 'duck') {
+      // Duck.ai: textarea
+      return document.querySelector('textarea');
+    }
+    if (SITE === 'huggingchat') {
+      // HuggingChat: textarea
+      return document.querySelector('textarea');
+    }
     // ChatGPT
     return document.querySelector('div[contenteditable="true"][role="textbox"]')
         || document.querySelector('textarea[name="prompt-textarea"]')
@@ -114,6 +128,10 @@ const POLL_INTERVAL = 400;                      // 轮询间隔(ms)
         if (e.innerText.trim().length > 50) count++;
       });
       return count;
+    }
+    if (SITE === 'duck' || SITE === 'huggingchat') {
+      // Duck.ai/HuggingChat: 通用,按 content/article 消息块数
+      return document.querySelectorAll('article, [class*="message"], [class*="response"]').length;
     }
     return document.querySelectorAll('[data-message-author-role="assistant"]').length;
   }
@@ -201,6 +219,14 @@ const POLL_INTERVAL = 400;                      // 轮询间隔(ms)
   }
 
   function isGenerating() {
+    if (SITE === 'duck' || SITE === 'huggingchat') {
+      // Duck.ai: 生成时 stop 按钮可见; HuggingChat: 生成时 submit 变成 stop
+      for (const s of ['button[aria-label*="Stop"]', 'button[aria-label*="stop"]', 'button[aria-label*="Cancel"]', '[class*="stop"]']) {
+        const b = document.querySelector(s);
+        if (b && b.offsetParent !== null) return true;
+      }
+      return false;
+    }
     if (SITE === 'doubao') {
       // 豆包: 生成时有停止按钮或 loading 状态
       for (const s of ['button[data-testid*="stop"]', 'button[aria-label*="停止"]', '.loading', '[class*="loading"]', '[class*="generating"]']) {
@@ -271,6 +297,10 @@ const POLL_INTERVAL = 400;                      // 轮询间隔(ms)
         ? ['button[aria-label="发送消息"]', 'button[aria-label="Send message"]', 'button.send-button', '.send-button-container button', 'mat-icon[fonticon="send"]']
         : SITE === 'doubao'
         ? ['button[data-testid*="send"]', 'div[data-testid*="send"]', '.send-btn', '[class*="send-button"]']
+        : SITE === 'duck'
+        ? ['button[aria-label="Ask"]', 'button[aria-label="Send"]', 'form button[type="submit"]']
+        : SITE === 'huggingchat'
+        ? ['button[type="submit"]', 'button[aria-label="Send"]', 'form button']
         : ['button[data-testid="send-button"]', 'button[aria-label="发送"]', 'button[aria-label="Send"]', 'form button[type="submit"]'];
       for (const sel of sendBtns) {
         const btn = document.querySelector(sel);
@@ -307,6 +337,14 @@ const POLL_INTERVAL = 400;                      // 轮询间隔(ms)
     }
     if (SITE === 'doubao') {
       location.href = 'https://www.doubao.com/chat';
+      return 'ok';
+    }
+    if (SITE === 'duck') {
+      location.href = 'https://duck.ai';
+      return 'ok';
+    }
+    if (SITE === 'huggingchat') {
+      location.href = 'https://huggingface.co/chat';
       return 'ok';
     }
     for (const sel of ['a[href="/"]', 'a[data-testid="new-chat"]']) {
