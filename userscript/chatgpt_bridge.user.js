@@ -1,12 +1,13 @@
 // ==UserScript==
-// @name         AI WebUI Bridge (ChatGPT + Gemini)
+// @name         AI WebUI Bridge (ChatGPT + Gemini + Doubao)
 // @namespace    https://github.com/OLmatter/chatgpt-bridge
-// @version      2.0.0
-// @description  把已登录的 ChatGPT / Gemini 页面通过 HTTP 桥接暴露给本地 agent。支持多窗口、快照回传、自动重连。
+// @version      2.1.0
+// @description  把已登录的 ChatGPT / Gemini / 豆包 页面通过 HTTP 桥接暴露给本地 agent。支持多窗口、快照回传、自动重连。
 // @author       You
 // @match        https://chatgpt.com/*
 // @match        https://chat.openai.com/*
 // @match        https://gemini.google.com/*
+// @match        https://www.doubao.com/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM.xmlHttpRequest
 // @connect      127.0.0.1
@@ -28,7 +29,8 @@ const POLL_INTERVAL = 400;                      // 轮询间隔(ms)
   const BASE = BACKEND_URL;
 
   // 检测当前是哪个 AI 网站
-  const SITE = location.hostname.includes('gemini') ? 'gemini' : 'chatgpt';
+  const HOST = location.hostname;
+  const SITE = HOST.includes('gemini') ? 'gemini' : (HOST.includes('doubao') ? 'doubao' : 'chatgpt');
 
   // GM_xmlhttpRequest(绕过 CSP)
   const G = typeof GM_xmlhttpRequest !== 'undefined'
@@ -82,10 +84,17 @@ const POLL_INTERVAL = 400;                      // 轮询间隔(ms)
   // ====== 页面快照(回传给后端)======
   function getEditor() {
     if (SITE === 'gemini') {
-      // Gemini: rich text editor (contenteditable) 或 textarea
       return document.querySelector('div[contenteditable="true"][role="textbox"]')
           || document.querySelector('.ql-editor[contenteditable="true"]')
           || document.querySelector('rich-textarea [contenteditable="true"]')
+          || document.querySelector('textarea');
+    }
+    if (SITE === 'doubao') {
+      // 豆包: contenteditable 富文本输入
+      return document.querySelector('div[contenteditable="true"][data-testid*="input"]')
+          || document.querySelector('[data-testid="chat_input_input"]')
+          || document.querySelector('div[contenteditable="true"]')
+          || document.querySelector('textarea[placeholder]')
           || document.querySelector('textarea');
     }
     // ChatGPT
@@ -96,8 +105,11 @@ const POLL_INTERVAL = 400;                      // 轮询间隔(ms)
 
   function countAssistant() {
     if (SITE === 'gemini') {
-      // Gemini: model-response 类
       return document.querySelectorAll('model-response, .model-response-text').length;
+    }
+    if (SITE === 'doubao') {
+      // 豆包: AI 回复的消息块(具体class需实际确认)
+      return document.querySelectorAll('[data-testid*="receive"], .receive-message, [class*="receiver"]').length;
     }
     return document.querySelectorAll('[data-message-author-role="assistant"]').length;
   }
@@ -116,8 +128,22 @@ const POLL_INTERVAL = 400;                      // 轮询间隔(ms)
     let lastAssistant = '';
     let msgCount = 0;
 
-    if (SITE === 'gemini') {
-      // Gemini: user-query 和 model-response 交替
+    if (SITE === 'doubao') {
+      // 豆包: 用户消息和AI回复交替(具体选择器需实际确认)
+      const responses = document.querySelectorAll('[data-testid*="receive"], .receive-message, [class*="receiver"]');
+      msgCount = responses.length;
+      const allTurns = document.querySelectorAll('[data-testid*="message"], [class*="message-content"], [class*="bubble"]');
+      const totalD = allTurns.length;
+      for (let i = Math.max(0, totalD - 6); i < totalD; i++) {
+        const t = allTurns[i];
+        const cls = t.className || '';
+        const role = (cls.includes('send') || cls.includes('sender')) ? 'user' : 'assistant';
+        recent.push({ role, text: t.innerText.trim().slice(-600) });
+      }
+      if (responses.length) {
+        lastAssistant = responses[responses.length - 1].innerText.trim().slice(-1000);
+      }
+    } else if (SITE === 'gemini') {
       const queries = document.querySelectorAll('user-query, .user-query');
       const responses = document.querySelectorAll('model-response, .model-response-text, .response-container');
       msgCount = responses.length;
@@ -164,6 +190,14 @@ const POLL_INTERVAL = 400;                      // 轮询间隔(ms)
   }
 
   function isGenerating() {
+    if (SITE === 'doubao') {
+      // 豆包: 生成时有停止按钮或 loading 状态
+      for (const s of ['button[data-testid*="stop"]', 'button[aria-label*="停止"]', '.loading', '[class*="loading"]', '[class*="generating"]']) {
+        const b = document.querySelector(s);
+        if (b && b.offsetParent !== null) return true;
+      }
+      return false;
+    }
     if (SITE === 'gemini') {
       for (const s of ['button[aria-label*="止"]', 'button[aria-label*="top"]', 'mat-progress-spinner', '.loading-indicator', 'mat-spinner']) {
         const b = document.querySelector(s);
@@ -183,6 +217,11 @@ const POLL_INTERVAL = 400;                      // 轮询间隔(ms)
   function getLastReply() {
     if (SITE === 'gemini') {
       const responses = document.querySelectorAll('model-response, .model-response-text, .response-container');
+      if (responses.length) return responses[responses.length - 1].innerText.trim();
+      return '';
+    }
+    if (SITE === 'doubao') {
+      const responses = document.querySelectorAll('[data-testid*="receive"], .receive-message, [class*="receiver"]');
       if (responses.length) return responses[responses.length - 1].innerText.trim();
       return '';
     }
@@ -215,6 +254,8 @@ const POLL_INTERVAL = 400;                      // 轮询间隔(ms)
     if ((editor.innerText || editor.value || '').trim().length > 0) {
       const sendBtns = SITE === 'gemini'
         ? ['button[aria-label="发送消息"]', 'button[aria-label="Send message"]', 'button.send-button', '.send-button-container button', 'mat-icon[fonticon="send"]']
+        : SITE === 'doubao'
+        ? ['button[data-testid*="send"]', 'div[data-testid*="send"]', '.send-btn', '[class*="send-button"]']
         : ['button[data-testid="send-button"]', 'button[aria-label="发送"]', 'button[aria-label="Send"]', 'form button[type="submit"]'];
       for (const sel of sendBtns) {
         const btn = document.querySelector(sel);
@@ -247,6 +288,10 @@ const POLL_INTERVAL = 400;                      // 轮询间隔(ms)
   function newChat() {
     if (SITE === 'gemini') {
       location.href = 'https://gemini.google.com/app';
+      return 'ok';
+    }
+    if (SITE === 'doubao') {
+      location.href = 'https://www.doubao.com/chat';
       return 'ok';
     }
     for (const sel of ['a[href="/"]', 'a[data-testid="new-chat"]']) {
