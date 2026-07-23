@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         AI WebUI Bridge (ChatGPT + Gemini + Doubao + Duck.ai + HuggingChat)
+// @name         AI WebUI Bridge (ChatGPT+Gemini+Doubao+Duck+HuggingChat+Dola)
 // @namespace    https://github.com/OLmatter/chatgpt-bridge
-// @version      2.2.0
-// @description  把已登录的 ChatGPT/Gemini/豆包/Duck.ai/HuggingChat 页面通过 HTTP 桥接暴露给本地 agent。
+// @version      2.3.0
+// @description  把已登录的 ChatGPT/Gemini/豆包/Duck.ai/HuggingChat/Dola 页面通过 HTTP 桥接暴露给本地 agent。
 // @author       You
 // @match        https://chatgpt.com/*
 // @match        https://chat.openai.com/*
@@ -10,6 +10,7 @@
 // @match        https://www.doubao.com/*
 // @match        https://duck.ai/*
 // @match        https://huggingface.co/chat*
+// @match        https://www.dola.com/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM.xmlHttpRequest
 // @connect      127.0.0.1
@@ -36,6 +37,7 @@ const POLL_INTERVAL = 400;                      // 轮询间隔(ms)
     : HOST.includes('doubao') ? 'doubao'
     : HOST.includes('duck.ai') || HOST.includes('duckduckgo') ? 'duck'
     : HOST.includes('huggingface') ? 'huggingchat'
+    : HOST.includes('dola.com') ? 'dola'
     : 'chatgpt';
 
   // GM_xmlhttpRequest(绕过 CSP)
@@ -103,12 +105,8 @@ const POLL_INTERVAL = 400;                      // 轮询间隔(ms)
           || document.querySelector('textarea[placeholder]')
           || document.querySelector('textarea');
     }
-    if (SITE === 'duck') {
-      // Duck.ai: textarea
-      return document.querySelector('textarea');
-    }
-    if (SITE === 'huggingchat') {
-      // HuggingChat: textarea
+    if (SITE === 'duck' || SITE === 'huggingchat' || SITE === 'dola') {
+      // Duck.ai/HuggingChat/Dola: textarea
       return document.querySelector('textarea');
     }
     // ChatGPT
