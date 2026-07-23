@@ -124,10 +124,10 @@ const POLL_INTERVAL = 400;                      // 轮询间隔(ms)
       return document.querySelectorAll('model-response, .model-response-text').length;
     }
     if (SITE === 'doubao' || SITE === 'dola') {
-      // 豆包: v_list_row 里文本>50字的算AI回复
+      // 豆包/Dola: v_list_row 里不含 justify-end 的算AI回复
       let count = 0;
       document.querySelectorAll('[class*="v_list_row"]').forEach(e => {
-        if (e.innerText.trim().length > 50) count++;
+        if (!e.innerHTML.includes('justify-end') && e.innerText.trim()) count++;
       });
       return count;
     }
@@ -154,6 +154,7 @@ const POLL_INTERVAL = 400;                      // 轮询间隔(ms)
 
     if (SITE === 'doubao' || SITE === 'dola') {
       // 豆包/Dola: 同框架, v_list_row 是每条消息
+      // 用户消息含 justify-end(右对齐), AI回复不含
       const rows = document.querySelectorAll('[class*="v_list_row"]');
       const totalD = rows.length;
       msgCount = 0;
@@ -161,14 +162,19 @@ const POLL_INTERVAL = 400;                      // 轮询间隔(ms)
         const t = rows[i];
         const txt = t.innerText.trim();
         if (!txt) continue;
-        const isAI = txt.length > 20;
-        if (isAI) msgCount++;
-        recent.push({ role: isAI ? 'assistant' : 'user', text: txt.slice(-600) });
+        // 判断: 用户消息的容器有 justify-end class
+        const html = t.innerHTML || '';
+        const isUser = html.includes('justify-end');
+        const role = isUser ? 'user' : 'assistant';
+        if (!isUser) msgCount++;
+        recent.push({ role, text: txt.slice(-600) });
       }
+      // 最后一条非用户回复
       for (let i = totalD - 1; i >= 0; i--) {
-        const txt = rows[i].innerText.trim();
-        if (txt.length > 20) {
-          lastAssistant = txt.slice(-1000);
+        const t = rows[i];
+        const html = t.innerHTML || '';
+        if (!html.includes('justify-end') && t.innerText.trim()) {
+          lastAssistant = t.innerText.trim().slice(-1000);
           break;
         }
       }
@@ -258,11 +264,13 @@ const POLL_INTERVAL = 400;                      // 轮询间隔(ms)
       return '';
     }
     if (SITE === 'doubao' || SITE === 'dola') {
-      // 豆包: 从后往前找文本>50字的v_list_row
+      // 豆包/Dola: 从后往前找不含 justify-end 的 v_list_row
       const rows = document.querySelectorAll('[class*="v_list_row"]');
       for (let i = rows.length - 1; i >= 0; i--) {
-        const txt = rows[i].innerText.trim();
-        if (txt.length > 50) return txt;
+        const t = rows[i];
+        if (!t.innerHTML.includes('justify-end') && t.innerText.trim()) {
+          return t.innerText.trim();
+        }
       }
       return '';
     }
